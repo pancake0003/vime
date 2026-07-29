@@ -148,7 +148,7 @@ def test_add_vllm_router_arguments_defaults_to_cache_aware(args_mod):
 
 
 @pytest.mark.unit
-def test_add_vllm_arguments_sets_slime_balance_thresholds(args_mod, monkeypatch):
+def test_add_vllm_arguments_overrides_router_balance_threshold_defaults(args_mod, monkeypatch):
     _patch_device_config(monkeypatch)
     parser = argparse.ArgumentParser(add_help=False)
     args_mod.add_vllm_arguments(parser)
@@ -176,7 +176,8 @@ def test_add_vllm_arguments_prefixes_regular_engine_flags(args_mod, monkeypatch)
     flags = {s for a in parser._actions for s in a.option_strings}
     assert "--vllm-server-concurrency" in flags
     assert "--vllm-tool-call-parser" in flags
-    assert "--vllm-weight-sync-packed" in flags
+    assert "--vllm-weight-sync-packed" not in flags
+    assert "--no-vllm-weight-sync-packed" not in flags
 
 
 @pytest.mark.unit

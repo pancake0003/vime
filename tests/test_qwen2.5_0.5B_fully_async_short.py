@@ -27,6 +27,8 @@ def prepare():
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir {HF_PATH}")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
     if U.is_rocm():
+        # ROCm image has no modelopt bridge: convert HF->Megatron into the
+        # host-mounted models dir so the checkpoint is cached and reused across runs.
         U.convert_checkpoint(
             MODEL_NAME,
             MODEL_TYPE,
