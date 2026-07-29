@@ -11,8 +11,9 @@ MODEL_NAME = "Qwen3-4B"
 MODEL_TYPE = "qwen3-4B"
 NUM_GPUS = 8
 
-# ROCm converts HF->Megatron (no modelopt bridge) into a container-local path.
-MG_PATH = f"/tmp/{MODEL_NAME}_torch_dist"
+# ROCm converts HF->Megatron (no modelopt bridge) into the host-mounted
+# models dir, so the converted checkpoint is cached and reused across runs.
+MG_PATH = f"/root/models/{MODEL_NAME}_torch_dist"
 
 
 parser = ArgumentParser()
@@ -40,7 +41,7 @@ def prepare(checkpoint_dir: str):
             megatron_model_type=MODEL_TYPE,
             num_gpus_per_node=NUM_GPUS,
             extra_args="--no-gradient-accumulation-fusion --attention-backend flash",
-            dir_dst="/tmp",
+            dir_dst="/root/models",
         )
     else:
         U.convert_checkpoint(

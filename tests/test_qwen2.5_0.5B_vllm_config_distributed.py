@@ -7,9 +7,9 @@ MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
 NUM_GPUS = 8
 
-# ROCm converts HF->Megatron (no modelopt bridge). Write to a container-local
-# path so concurrent short tests sharing this model don't race on the output.
-MG_PATH = f"/tmp/{MODEL_NAME}_torch_dist"
+# ROCm converts HF->Megatron (no modelopt bridge) into the host-mounted
+# models dir, so the converted checkpoint is cached and reused across runs.
+MG_PATH = f"/root/models/{MODEL_NAME}_torch_dist"
 
 # Inline vLLM config: same model, 3 engine groups with different parallelism.
 # Non-colocated (decoupled training and rollout): actor uses 4 GPUs, rollout uses 4 GPUs.
@@ -41,7 +41,7 @@ def prepare():
             MODEL_TYPE,
             num_gpus_per_node=1,
             extra_args="--no-gradient-accumulation-fusion --attention-backend flash",
-            dir_dst="/tmp",
+            dir_dst="/root/models",
         )
 
 

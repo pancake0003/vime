@@ -11,8 +11,9 @@ MODEL_NAME = "Qwen3-30B-A3B"
 MODEL_TYPE = "qwen3-30B-A3B"
 NUM_GPUS = 8
 
-# ROCm converts HF->Megatron into a container-local path (no modelopt bridge).
-MG_PATH = f"/tmp/{MODEL_NAME}_torch_dist"
+# ROCm converts HF->Megatron (no modelopt bridge) into the host-mounted
+# models dir, so the converted checkpoint is cached and reused across runs.
+MG_PATH = f"/root/models/{MODEL_NAME}_torch_dist"
 
 
 def prepare():
@@ -28,7 +29,7 @@ def prepare():
             megatron_model_type=MODEL_TYPE,
             num_gpus_per_node=NUM_GPUS,
             extra_args="--no-gradient-accumulation-fusion --attention-backend flash",
-            dir_dst="/tmp",
+            dir_dst="/root/models",
         )
     else:
         U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS)
@@ -53,7 +54,11 @@ def execute():
         "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 8192 "
         "--rollout-temperature 1 "
-        "--rollout-data-transport nixl "
+        # ROCm: Ray's rdt NIXL tensor-transport (ray.put _tensor_transport="nixl")
+        # segfaults in free_actor_object_callback at rollout teardown even with the
+        # rixl module present (rixl fixes vLLM's KV-connector path, not Ray's rdt).
+        # Fall back to object-store on ROCm.
+        f'{"--rollout-data-transport nixl " if not U.is_rocm() else "--rollout-data-transport object-store "}'
         "--global-batch-size 16 "
         "--balance-data "
     )

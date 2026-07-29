@@ -83,7 +83,7 @@ HEADER = """# Buildkite CI for vime — AMD ROCm GPU suites.
 
 env:
   # Prebuilt ROCm image (docker/Dockerfile.rocm). Override per-agent if needed.
-  VIME_ROCM_IMAGE: "vllm/vime-rocm:latest"
+  VIME_ROCM_IMAGE: "joysong2/private:latest"
   VIME_TEST_ENABLE_INFINITE_RUN: "false"
   # Defaults for the flags the suite table can override per-step.
   VIME_TEST_USE_DEEPEP: "0"

@@ -9,8 +9,9 @@ ENABLE_EVAL = bool(int(os.environ.get("VIME_TEST_ENABLE_EVAL", "1")))
 MODEL_NAME = "Qwen3-4B"
 MODEL_TYPE = "qwen3-4B"
 NUM_GPUS = 8
-# ROCm converts HF->Megatron into a container-local path.
-MG_PATH = f"/tmp/{MODEL_NAME}_torch_dist"
+# ROCm converts HF->Megatron (no modelopt bridge) into the host-mounted
+# models dir, so the converted checkpoint is cached and reused across runs.
+MG_PATH = f"/root/models/{MODEL_NAME}_torch_dist"
 
 
 def prepare():
@@ -25,7 +26,7 @@ def prepare():
             megatron_model_type=MODEL_TYPE,
             num_gpus_per_node=NUM_GPUS,
             extra_args="--no-gradient-accumulation-fusion --attention-backend flash",
-            dir_dst="/tmp",
+            dir_dst="/root/models",
         )
     else:
         U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS)
@@ -152,6 +153,12 @@ megatron:
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
+        # ROCm: torch.compile→inductor→Triton crashes on gfx950 for the small
+        # autotune-benchmarked kernels ("Pointer argument ... cannot be accessed
+        # from Triton"). It's hit via Megatron jit_fuser, TE jit_fuser, AND vime's
+        # own @torch.compile in ppo_utils.py. TORCH_COMPILE_DISABLE=1 no-ops ALL
+        # torch.compile globally (falls back to eager) — one systemic switch.
+        extra_env_vars={"TORCH_COMPILE_DISABLE": "1"} if U.is_rocm() else {},
     )
 
 
