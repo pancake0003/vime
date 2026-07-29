@@ -104,8 +104,26 @@ def install_vllm_router_stub() -> None:
         return
 
     class RouterArgs:
+        # Stub of vllm_router.RouterArgs for CPU unit tests when the real package is absent.
         @classmethod
-        def add_cli_args(cls, parser, *args, **kwargs):  # noqa: ARG003
+        def add_cli_args(
+            cls, parser, *args, use_router_prefix=False, exclude_host_port=False, **kwargs
+        ):  # noqa: ARG003
+            prefix = "router-" if use_router_prefix else ""
+            dprefix = "router_" if use_router_prefix else ""
+            parser.add_argument(
+                f"--{prefix}policy",
+                dest=f"{dprefix}policy",
+                type=str,
+                default="cache_aware",
+                choices=["random", "round_robin", "cache_aware", "power_of_two", "consistent_hash"],
+            )
+            parser.add_argument(
+                f"--{prefix}request-timeout-secs",
+                dest=f"{dprefix}request_timeout_secs",
+                type=int,
+                default=1800,
+            )
             return parser
 
         @classmethod
@@ -170,6 +188,7 @@ def install_megatron_mpu_stub() -> MagicMock:
     mpu_stub.get_tensor_model_parallel_world_size.return_value = 2
     mpu_stub.get_tensor_model_parallel_group.return_value = "tp_group"
     mpu_stub.get_pipeline_model_parallel_rank.return_value = 0
+    mpu_stub.get_pipeline_model_parallel_world_size.return_value = 1
     mpu_stub.get_expert_model_parallel_world_size.return_value = 1
     mpu_stub.get_expert_model_parallel_group.return_value = "ep_group"
 
@@ -209,6 +228,9 @@ def install_ray_stub() -> None:
 
 def install_vllm_cli_stubs() -> None:
     """Stub vLLM CLI/parser imports for ``vime.backends.vllm_utils.arguments`` when vLLM is absent."""
+    # arguments.py imports RouterArgs at module load, so the router stub must be present too.
+    install_vllm_router_stub()
+
     if real_module_available("vllm"):
         return
 
@@ -237,14 +259,57 @@ def install_vllm_cli_stubs() -> None:
 
     arg_utils.AsyncEngineArgs = AsyncEngineArgs
     engine_mod.arg_utils = arg_utils
+    system_utils_mod = types.ModuleType("vllm.utils.system_utils")
+    system_utils_mod.kill_process_tree = lambda pid, include_parent=True: None  # noqa: ARG005
+    utils_mod.system_utils = system_utils_mod
+
+    # vllm.entrypoints stubs (used by arguments.add_vllm_arguments and vllm_engine._vllm_server_field_names)
+    entrypoints_mod = types.ModuleType("vllm.entrypoints")
+    entrypoints_mod.__path__ = []
+    openai_mod = types.ModuleType("vllm.entrypoints.openai")
+    openai_mod.__path__ = []
+    cli_args_mod = types.ModuleType("vllm.entrypoints.openai.cli_args")
+
+    import dataclasses as _dc
+
+    @_dc.dataclass
+    class FrontendArgs:
+        @classmethod
+        def add_cli_args(cls, parser):  # noqa: ARG003
+            return parser
+
+    cli_args_mod.FrontendArgs = FrontendArgs
+    cli_args_mod.make_arg_parser = lambda parser=None: parser
+    cli_args_mod.validate_parsed_serve_args = lambda args: args
+    openai_mod.cli_args = cli_args_mod
+    entrypoints_mod.openai = openai_mod
+    vllm_mod.entrypoints = entrypoints_mod
+
+    cli_mod = types.ModuleType("vllm.entrypoints.cli")
+    cli_mod.__path__ = []
+    serve_mod = types.ModuleType("vllm.entrypoints.cli.serve")
+
+    class ServeSubcommand:
+        pass
+
+    serve_mod.ServeSubcommand = ServeSubcommand
+    cli_mod.serve = serve_mod
+    entrypoints_mod.cli = cli_mod
+
     vllm_mod.engine = engine_mod
     vllm_mod.utils = utils_mod
 
     sys.modules["vllm"] = vllm_mod
     sys.modules["vllm.utils"] = utils_mod
     sys.modules["vllm.utils.argparse_utils"] = argparse_utils
+    sys.modules["vllm.utils.system_utils"] = system_utils_mod
     sys.modules["vllm.engine"] = engine_mod
     sys.modules["vllm.engine.arg_utils"] = arg_utils
+    sys.modules["vllm.entrypoints"] = entrypoints_mod
+    sys.modules["vllm.entrypoints.openai"] = openai_mod
+    sys.modules["vllm.entrypoints.openai.cli_args"] = cli_args_mod
+    sys.modules["vllm.entrypoints.cli"] = cli_mod
+    sys.modules["vllm.entrypoints.cli.serve"] = serve_mod
 
 
 def install_triton_stub() -> None:
