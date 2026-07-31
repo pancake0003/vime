@@ -123,14 +123,7 @@ megatron:
         f"{'' if U.is_rocm() else '--vllm-max-cudagraph-capture-size 16 '}"
     )
 
-    ci_args = (
-        "--ci-test "
-        # ROCm: the disaggregated PPO actor forward recomputes log_probs that
-        # diverge from vLLM's generation-time values (rollout-1 samples truncate
-        # to full length), tripping the CI KL sanity assert. Skip that check on
-        # ROCm until the divergence in the PD-disaggregated path is root-caused.
-        f'{"--ci-disable-kl-checker " if U.is_rocm() else ""}'
-    )
+    ci_args = "--ci-test "
 
     misc_args = (
         # default dropout in megatron is 0.1

@@ -358,16 +358,10 @@ def log_rollout_data(
                 # TODO: figure out why there is a small numerical difference in log_probs and ref_log_probs in CI test, and whether it's expected or not.
                 # assert reduced_log_dict["rollout/log_probs"] == reduced_log_dict["rollout/ref_log_probs"]
                 assert abs(reduced_log_dict["rollout/log_probs"] - reduced_log_dict["rollout/ref_log_probs"]) < 1e-8
-            # These are CI sanity bounds that assume near-greedy generation. They do
-            # not hold when the rollout legitimately produces high-perplexity output
-            # (e.g. fully-truncated gens): mean log_prob can be well below -1 while the
-            # actor forward is still correct (log_probs == ref_log_probs exactly). Honor
-            # ci_disable_kl_checker here too, so a test can opt out of these heuristics.
-            if not getattr(args, "ci_disable_kl_checker", False):
-                if "rollout/log_probs" in reduced_log_dict:
-                    assert -1 < reduced_log_dict["rollout/log_probs"] < 0
-                if "rollout/entropy" in reduced_log_dict:
-                    assert 0 < reduced_log_dict["rollout/entropy"] < 1
+            if "rollout/log_probs" in reduced_log_dict:
+                assert -1 < reduced_log_dict["rollout/log_probs"] < 0
+            if "rollout/entropy" in reduced_log_dict:
+                assert 0 < reduced_log_dict["rollout/entropy"] < 1
 
     if args.log_multi_turn:
         log_multi_turn_data(rollout_id, args, rollout_data)
