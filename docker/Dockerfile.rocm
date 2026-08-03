@@ -228,6 +228,41 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@d64a639 \
         --no-cache-dir --force-reinstall
 
+# ---- Build ROCm UCX 1.19.x (image ships only UCX 1.12.1 runtime, no headers) ----
+RUN --mount=target=/var/lib/apt/lists,type=cache,sharing=locked \
+    --mount=target=/var/cache/apt,type=cache,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake pkg-config libcxxopts-dev libaio-dev liburing-dev \
+        autoconf automake libtool
+
+RUN git clone --depth 1 -b v1.19.x https://github.com/ROCm/ucx.git /tmp/ucx && \
+    cd /tmp/ucx && ./autogen.sh && \
+    ./configure --prefix=/opt/ucx \
+        --enable-shared --disable-static --disable-doxygen-doc \
+        --enable-optimizations --enable-devel-headers \
+        --with-rocm=/opt/rocm --with-verbs --with-dm --enable-mt && \
+    make -j"$(nproc)" && make install && \
+    rm -rf /tmp/ucx
+
+# ---- Build + install RIXL (ROCm NIXL) -> provides the `rixl` python module ----
+# Fixes vs. upstream RIXL build:
+#   - install meson-python (the `mesonpy` PEP 517 backend, needed with --no-build-isolation)
+#   - drop the prometheus-cpp subproject: its libcore.so installs to {prefix}/lib,
+#     which meson-python cannot map into a wheel
+#   - use unpinned meson so meson-python is new enough for PEP 639 license metadata
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install meson meson-python "pybind11[global]" ninja patchelf pyproject-metadata tomlkit && \
+    git clone --depth 1 https://github.com/ROCm/rixl.git /tmp/rixl && \
+    cd /tmp/rixl && \
+    rm -f subprojects/prometheus-cpp.wrap && \
+    pip3 install . --no-build-isolation \
+        --config-settings=setup-args="-Ducx_path=/opt/ucx" \
+        --config-settings=setup-args="-Drocm_path=/opt/rocm" && \
+    rm -rf /tmp/rixl
+
+# Make the RIXL/UCX 1.19 libs win at runtime over the old system UCX 1.12.
+ENV LD_LIBRARY_PATH=/opt/ucx/lib:${LD_LIBRARY_PATH}
+
 COPY requirements.txt /tmp/vime-requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r /tmp/vime-requirements.txt && \

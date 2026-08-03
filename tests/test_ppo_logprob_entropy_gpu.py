@@ -14,8 +14,11 @@ from vime.utils.ppo_utils import calculate_log_probs_and_entropy
 NUM_GPUS = 2
 
 # Megatron's JIT fused CE can differ from the same Python-level expression by
-# one fp32 ulp in the unmasked path.
-FORWARD_ATOL = 1e-7
+# one fp32 ulp in the unmasked path. For O(1) log-prob values one ulp is
+# 2**-23 ~= 1.19e-7, so the tolerance must be >= that; 1e-7 was fractionally
+# too tight and flaked by exactly one ulp at a single element on the fused
+# CUDA/ROCm path. Use 1.2e-7 to admit exactly one ulp, nothing looser.
+FORWARD_ATOL = 1.2e-7
 FORWARD_RTOL = 0.0
 # Entropy values are O(1) in this parity fixture; allow a small difference from
 # the memory-saving CUDA reduction without relaxing log-prob parity.
