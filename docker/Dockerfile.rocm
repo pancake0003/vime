@@ -193,27 +193,15 @@ RUN --mount=type=cache,target=/root/.cache/ccache \
 # ======================================== vime ===============================
 FROM aiter AS install_vime
 
-# Use vime's mainline Megatron (NVIDIA/Megatron-LM at ${MEGATRON_COMMIT}) plus the
-# AMD megatron.patch under docker/amd_patch/${PATCH_VERSION}/.
+# Use ROCm's Megatron-LM fork (ROCm/Megatron-LM), which already carries the AMD
+# changes previously applied via docker/amd_patch/*.patch on top of NVIDIA's tree.
 # The ROCm fork-after-HIP-init checkpoint segfault is handled at runtime by
 # vime.utils.rocm_checkpoint_writer.
-ARG PATCH_VERSION=latest
-ARG MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
+ARG MEGATRON_REPO=https://github.com/ROCm/Megatron-LM.git
+ARG MEGATRON_COMMIT=fb4552449f9b33c6f72207a80e80045eadf5267e
 RUN --mount=type=cache,target=/root/.cache/pip \
-    git clone https://github.com/NVIDIA/Megatron-LM.git --recursive /root/Megatron-LM && \
-    cd /root/Megatron-LM && git checkout ${MEGATRON_COMMIT}
-
-COPY docker/amd_patch/${PATCH_VERSION}/megatron.patch /root/Megatron-LM/
-COPY docker/amd_patch/${PATCH_VERSION}/amd_megatron_fused_kernels_init.patch /root/Megatron-LM/
-RUN cd /root/Megatron-LM && \
-    git update-index --refresh && \
-    git apply megatron.patch --3way && \
-    git apply amd_megatron_fused_kernels_init.patch --3way && \
-    if grep -R -n '^<<<<<<< ' .; then \
-      echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-      exit 1; \
-    fi && \
-    rm megatron.patch amd_megatron_fused_kernels_init.patch && \
+    git clone ${MEGATRON_REPO} --recursive /root/Megatron-LM && \
+    cd /root/Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
     pip install -e .
 
 RUN --mount=type=cache,target=/root/.cache/pip \
