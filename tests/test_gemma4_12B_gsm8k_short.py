@@ -16,21 +16,12 @@ def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"hf download {MODEL_ID} --local-dir /root/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/gsm8k")
-    if U.is_rocm():
-        U.convert_checkpoint(
-            model_name=MODEL_NAME,
-            megatron_model_type=MODEL_TYPE,
-            num_gpus_per_node=NUM_GPUS,
-            extra_args="--no-gradient-accumulation-fusion --attention-backend flash",
-            dir_dst="/root/models",
-        )
-    else:
-        U.convert_checkpoint(
-            model_name=MODEL_NAME,
-            megatron_model_type=MODEL_TYPE,
-            num_gpus_per_node=NUM_GPUS,
-            dir_dst="/root/models",
-        )
+    U.convert_checkpoint(
+        model_name=MODEL_NAME,
+        megatron_model_type=MODEL_TYPE,
+        num_gpus_per_node=NUM_GPUS,
+        dir_dst="/root/models",
+    )
 
 
 def execute():
@@ -115,7 +106,6 @@ def execute():
         "--actor-num-gpus-per-node 8 "
         "--colocate "
         "--megatron-to-hf-mode raw "
-        f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
     )
 
     train_args = (
@@ -134,9 +124,6 @@ def execute():
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
-        # Gemma4 is a multimodal `gemma4_unified` checkpoint with no per-layer
-        # scalar weights; allow proceeding with defaults (text-only RL path).
-        extra_env_vars={"GEMMA4_ALLOW_MISSING_LAYER_SCALARS": "1"} if U.is_rocm() else {},
     )
 
 

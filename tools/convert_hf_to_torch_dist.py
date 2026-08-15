@@ -119,17 +119,7 @@ def main():
 
     # Load model
     hf_model_path = args.hf_checkpoint
-    # Multimodal wrappers (e.g. Gemma4 `gemma4_unified`) expose their LLM under
-    # `text_config`; AutoBridge keys off the top-level model_type, which isn't
-    # registered. Unwrap to the text config so the right bridge is selected.
-    # No-op for non-multimodal models (no `text_config`).
-    from transformers import AutoConfig
-
-    hf_config = AutoConfig.from_pretrained(hf_model_path, trust_remote_code=True)
-    if hasattr(hf_config, "text_config"):
-        bridge = AutoBridge.from_config(hf_config.text_config)
-    else:
-        bridge = AutoBridge.from_pretrained(hf_model_path, trust_remote_code=True)
+    bridge = AutoBridge.from_pretrained(hf_model_path, trust_remote_code=True)
     bridge.load_weights(model, hf_model_path, memory_efficient=True)
     print(f"Model loaded: {hf_model_path}")
 

@@ -7,10 +7,6 @@ MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
 NUM_GPUS = 8
 
-# ROCm converts HF->Megatron (no modelopt bridge) into the host-mounted
-# models dir, so the converted checkpoint is cached and reused across runs.
-MG_PATH = f"/root/models/{MODEL_NAME}_torch_dist"
-
 # Inline vLLM config: same model, 3 engine groups with different parallelism.
 # Non-colocated (decoupled training and rollout): actor uses 4 GPUs, rollout uses 4 GPUs.
 # Group 1: 2 GPUs, 2 GPUs/engine (tp=2) → 1 engine
@@ -35,14 +31,6 @@ def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/gsm8k")
-    if U.is_rocm():
-        U.convert_checkpoint(
-            MODEL_NAME,
-            MODEL_TYPE,
-            num_gpus_per_node=1,
-            extra_args="--no-gradient-accumulation-fusion --attention-backend flash",
-            dir_dst="/root/models",
-        )
 
 
 def execute():
@@ -52,10 +40,7 @@ def execute():
     config_file.flush()
     config_path = config_file.name
 
-    if U.is_rocm():
-        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ --ref-load {MG_PATH}/ "
-    else:
-        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
         "--prompt-data /root/datasets/gsm8k/train.parquet "
@@ -114,9 +99,9 @@ def execute():
 
     vllm_args = (
         "--rollout-num-gpus-per-engine 1 "
-        f"--vllm-gpu-memory-utilization {'0.3' if U.is_rocm() else '0.7'} "
+        "--vllm-gpu-memory-utilization 0.7 "
         "--vllm-max-num-seqs 32 "
-        f"{'' if U.is_rocm() else '--vllm-max-cudagraph-capture-size 16 '}"
+        "--vllm-max-cudagraph-capture-size 16 "
         f"--vllm-config {config_path} "
     )
 
@@ -132,8 +117,7 @@ def execute():
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 4 "
         "--rollout-num-gpus 4 "
-        f'{"--megatron-to-hf-mode bridge " if not U.is_rocm() else ""}'
-        f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
+        "--megatron-to-hf-mode bridge "
     )
 
     train_args = (

@@ -28,9 +28,6 @@ import vime.utils.external_utils.command_utils as U
 MODEL_NAME = "Qwen3-4B"
 MODEL_TYPE = "qwen3-4B"
 TORCH_DIST_CKPT = f"/root/models/{MODEL_NAME}_torch_dist"
-# ROCm converts HF->Megatron (no modelopt bridge) into the host-mounted
-# models dir, so the converted checkpoint is cached and reused across runs.
-MG_PATH = f"/root/models/{MODEL_NAME}_torch_dist"
 NUM_GPUS = 6
 NUM_TRAIN_GPUS = 4
 NUM_PREFILL_ENGINES = 1
@@ -48,7 +45,9 @@ def _get_bond_ipv4():
     if not net_root.exists():
         return None
 
-    bond_ifaces = [path.name for path in net_root.iterdir() if path.name.startswith("bond") and path.name[4:].isdigit()]
+    bond_ifaces = [
+        path.name for path in net_root.iterdir() if path.name.startswith("bond") and path.name[4:].isdigit()
+    ]
     bond_ifaces.sort(key=lambda name: int(name[4:]))
     for iface in bond_ifaces:
         try:
@@ -91,21 +90,12 @@ def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/gsm8k")
-    if U.is_rocm():
-        U.convert_checkpoint(
-            model_name=MODEL_NAME,
-            megatron_model_type=MODEL_TYPE,
-            num_gpus_per_node=NUM_TRAIN_GPUS,
-            extra_args="--no-gradient-accumulation-fusion --attention-backend flash",
-            dir_dst="/root/models",
-        )
-    else:
-        U.convert_checkpoint(
-            model_name=MODEL_NAME,
-            megatron_model_type=MODEL_TYPE,
-            num_gpus_per_node=NUM_TRAIN_GPUS,
-            dir_dst="/root/models",
-        )
+    U.convert_checkpoint(
+        model_name=MODEL_NAME,
+        megatron_model_type=MODEL_TYPE,
+        num_gpus_per_node=NUM_TRAIN_GPUS,
+        dir_dst="/root/models",
+    )
 
 
 def _get_gpu_split():
@@ -244,10 +234,7 @@ def execute():
     disk_dir_cm = tempfile.TemporaryDirectory(prefix="vime_external_pd_full_disk_")
     disk_dir = disk_dir_cm.name
     try:
-        if U.is_rocm():
-            ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {MG_PATH}/ "
-        else:
-            ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {TORCH_DIST_CKPT} "
+        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {TORCH_DIST_CKPT} "
 
         rollout_args = (
             "--prompt-data /root/datasets/gsm8k/train.parquet "
@@ -326,7 +313,6 @@ def execute():
             "--attention-backend flash "
             "--actor-num-nodes 1 "
             f"--actor-num-gpus-per-node {NUM_TRAIN_GPUS} "
-            f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
         )
 
         train_args = (

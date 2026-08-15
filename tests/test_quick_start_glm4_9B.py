@@ -6,9 +6,6 @@ ENABLE_EVAL = U.get_bool_env_var("VIME_TEST_ENABLE_EVAL", "1")
 MODEL_NAME = "GLM-Z1-9B-0414"
 MODEL_TYPE = "glm4-9B"
 NUM_GPUS = 8
-# ROCm converts HF->Megatron (no modelopt bridge) into the host-mounted
-# models dir, so the converted checkpoint is cached and reused across runs.
-MG_PATH = f"/root/models/{MODEL_NAME}_torch_dist"
 
 
 def prepare():
@@ -17,23 +14,11 @@ def prepare():
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
     U.hf_download_dataset("zhuzilin/aime-2024")
 
-    if U.is_rocm():
-        U.convert_checkpoint(
-            model_name=MODEL_NAME,
-            megatron_model_type=MODEL_TYPE,
-            num_gpus_per_node=NUM_GPUS,
-            extra_args="--no-gradient-accumulation-fusion --attention-backend flash",
-            dir_dst="/root/models",
-        )
-    else:
-        U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS)
+    U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS)
 
 
 def execute():
-    if U.is_rocm():
-        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {MG_PATH}/ "
-    else:
-        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/{MODEL_NAME}_torch_dist "
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/{MODEL_NAME}_torch_dist "
 
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
@@ -94,7 +79,7 @@ def execute():
         "--adam-beta2 0.98 "
     )
 
-    vllm_args = "--rollout-num-gpus-per-engine 2 " f"{'' if U.is_rocm() else '--vllm-max-cudagraph-capture-size 16 '}"
+    vllm_args = "--rollout-num-gpus-per-engine 2 " "--vllm-max-cudagraph-capture-size 16 "
 
     ci_args = "--ci-test "
 
@@ -110,7 +95,6 @@ def execute():
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 4 "
         "--rollout-num-gpus 4 "
-        f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
     )
 
     train_args = (

@@ -35,8 +35,8 @@ steps:
   - group: ":fire: short"
     depends_on: gate-short
     steps:
-      - label: ":fire: short: test_qwen2.5_0.5B_fully_async_short.py"
-        key: short-test-qwen2-5-0-5b-fully-async-short
+      - label: ":fire: short: test_qwen2.5_0.5B_fully_async_short-rocm.py"
+        key: short-test-qwen2-5-0-5b-fully-async-short-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -45,7 +45,7 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen2.5_0.5B_fully_async_short.py"
+          TEST_FILE: "test_qwen2.5_0.5B_fully_async_short-rocm.py"
           NUM_GPUS: "4"
         command: &rocm_gpu_test |
           docker run --rm \
@@ -102,8 +102,8 @@ steps:
   - group: ":gear: vllm-config"
     depends_on: gate-vllm-config
     steps:
-      - label: ":warning: vllm-config: test_qwen2.5_0.5B_vllm_config.py"
-        key: vllm-config-test-qwen2-5-0-5b-vllm-config
+      - label: ":warning: vllm-config: test_qwen2.5_0.5B_vllm_config-rocm.py"
+        key: vllm-config-test-qwen2-5-0-5b-vllm-config-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -113,11 +113,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen2.5_0.5B_vllm_config.py"
+          TEST_FILE: "test_qwen2.5_0.5B_vllm_config-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
-      - label: ":warning: vllm-config: test_qwen2.5_0.5B_vllm_config_distributed.py"
-        key: vllm-config-test-qwen2-5-0-5b-vllm-config-distributed
+      - label: ":warning: vllm-config: test_qwen2.5_0.5B_vllm_config_distributed-rocm.py"
+        key: vllm-config-test-qwen2-5-0-5b-vllm-config-distributed-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -127,11 +127,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen2.5_0.5B_vllm_config_distributed.py"
+          TEST_FILE: "test_qwen2.5_0.5B_vllm_config_distributed-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
-      - label: ":warning: vllm-config: test_vllm_config_mixed_offload.py"
-        key: vllm-config-test-vllm-config-mixed-offload
+      - label: ":warning: vllm-config: test_vllm_config_mixed_offload-rocm.py"
+        key: vllm-config-test-vllm-config-mixed-offload-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -141,11 +141,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_vllm_config_mixed_offload.py"
+          TEST_FILE: "test_vllm_config_mixed_offload-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
-      - label: ":warning: vllm-config: test_vllm_config_mixed_offload_ft.py"
-        key: vllm-config-test-vllm-config-mixed-offload-ft
+      - label: ":warning: vllm-config: test_vllm_config_mixed_offload_ft-rocm.py"
+        key: vllm-config-test-vllm-config-mixed-offload-ft-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -155,7 +155,7 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_vllm_config_mixed_offload_ft.py"
+          TEST_FILE: "test_vllm_config_mixed_offload_ft-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
 
@@ -166,8 +166,8 @@ steps:
   - group: ":brain: megatron"
     depends_on: gate-megatron
     steps:
-      - label: ":warning: megatron: test_full_disk_weight_update.py"
-        key: megatron-test-full-disk-weight-update
+      - label: ":warning: megatron: test_full_disk_weight_update-rocm.py"
+        key: megatron-test-full-disk-weight-update-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -177,11 +177,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_full_disk_weight_update.py"
+          TEST_FILE: "test_full_disk_weight_update-rocm.py"
           NUM_GPUS: "4"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_quick_start_glm4_9B.py"
-        key: megatron-test-quick-start-glm4-9b
+      - label: ":warning: megatron: test_quick_start_glm4_9B-rocm.py"
+        key: megatron-test-quick-start-glm4-9b-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -191,11 +191,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_quick_start_glm4_9B.py"
+          TEST_FILE: "test_quick_start_glm4_9B-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_glm4.7_30B_A3B_pd_mooncake.py"
-        key: megatron-test-glm4-7-30b-a3b-pd-mooncake
+      - label: ":warning: megatron: test_glm4.7_30B_A3B_pd_mooncake-rocm.py"
+        key: megatron-test-glm4-7-30b-a3b-pd-mooncake-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -205,11 +205,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_glm4.7_30B_A3B_pd_mooncake.py"
+          TEST_FILE: "test_glm4.7_30B_A3B_pd_mooncake-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_qwen3_30B_A3B.py (use_deepep=1,use_fp8_rollout=1)"
-        key: megatron-test-qwen3-30b-a3b
+      - label: ":warning: megatron: test_qwen3_30B_A3B-rocm.py (use_deepep=1,use_fp8_rollout=1)"
+        key: megatron-test-qwen3-30b-a3b-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -219,13 +219,13 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_30B_A3B.py"
+          TEST_FILE: "test_qwen3_30B_A3B-rocm.py"
           NUM_GPUS: "8"
           VIME_TEST_USE_DEEPEP: "1"
           VIME_TEST_USE_FP8_ROLLOUT: "1"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_qwen3.6_35B_A3B_pd_mooncake.py (use_deepep=1)"
-        key: megatron-test-qwen3-6-35b-a3b-pd-mooncake
+      - label: ":warning: megatron: test_qwen3.6_35B_A3B_pd_mooncake-rocm.py (use_deepep=1)"
+        key: megatron-test-qwen3-6-35b-a3b-pd-mooncake-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -235,12 +235,12 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3.6_35B_A3B_pd_mooncake.py"
+          TEST_FILE: "test_qwen3.6_35B_A3B_pd_mooncake-rocm.py"
           NUM_GPUS: "8"
           VIME_TEST_USE_DEEPEP: "1"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_qwen3_30B_A3B_r3.py (use_deepep=1,use_fp8_rollout=1,enable_eval=0)"
-        key: megatron-test-qwen3-30b-a3b-r3
+      - label: ":warning: megatron: test_qwen3_30B_A3B_r3-rocm.py (use_deepep=1,use_fp8_rollout=1,enable_eval=0)"
+        key: megatron-test-qwen3-30b-a3b-r3-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -250,14 +250,14 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_30B_A3B_r3.py"
+          TEST_FILE: "test_qwen3_30B_A3B_r3-rocm.py"
           NUM_GPUS: "8"
           VIME_TEST_USE_DEEPEP: "1"
           VIME_TEST_USE_FP8_ROLLOUT: "1"
           VIME_TEST_ENABLE_EVAL: "0"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_qwen3_30B_A3B_r3.py (enable_eval=0)"
-        key: megatron-test-qwen3-30b-a3b-r3-2
+      - label: ":warning: megatron: test_qwen3_30B_A3B_r3-rocm.py (enable_eval=0)"
+        key: megatron-test-qwen3-30b-a3b-r3-rocm-2
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -267,12 +267,12 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_30B_A3B_r3.py"
+          TEST_FILE: "test_qwen3_30B_A3B_r3-rocm.py"
           NUM_GPUS: "8"
           VIME_TEST_ENABLE_EVAL: "0"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_qwen3_4B_ppo.py"
-        key: megatron-test-qwen3-4b-ppo
+      - label: ":warning: megatron: test_qwen3_4B_ppo-rocm.py"
+        key: megatron-test-qwen3-4b-ppo-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -282,11 +282,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_4B_ppo.py"
+          TEST_FILE: "test_qwen3_4B_ppo-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_qwen3_4B_ppo_disaggregate.py"
-        key: megatron-test-qwen3-4b-ppo-disaggregate
+      - label: ":warning: megatron: test_qwen3_4B_ppo_disaggregate-rocm.py"
+        key: megatron-test-qwen3-4b-ppo-disaggregate-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -296,11 +296,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_4B_ppo_disaggregate.py"
+          TEST_FILE: "test_qwen3_4B_ppo_disaggregate-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_qwen3_4B_ppo_train_critic_only.py"
-        key: megatron-test-qwen3-4b-ppo-train-critic-only
+      - label: ":warning: megatron: test_qwen3_4B_ppo_train_critic_only-rocm.py"
+        key: megatron-test-qwen3-4b-ppo-train-critic-only-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -310,11 +310,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_4B_ppo_train_critic_only.py"
+          TEST_FILE: "test_qwen3_4B_ppo_train_critic_only-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_ppo_logprob_entropy_gpu.py"
-        key: megatron-test-ppo-logprob-entropy-gpu
+      - label: ":warning: megatron: test_ppo_logprob_entropy_gpu-rocm.py"
+        key: megatron-test-ppo-logprob-entropy-gpu-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -324,11 +324,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_ppo_logprob_entropy_gpu.py"
+          TEST_FILE: "test_ppo_logprob_entropy_gpu-rocm.py"
           NUM_GPUS: "2"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_release_train.py"
-        key: megatron-test-release-train
+      - label: ":warning: megatron: test_release_train-rocm.py"
+        key: megatron-test-release-train-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -338,11 +338,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_release_train.py"
+          TEST_FILE: "test_release_train-rocm.py"
           NUM_GPUS: "4"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_qwen3_4B_streaming_partial_rollout.py"
-        key: megatron-test-qwen3-4b-streaming-partial-rollout
+      - label: ":warning: megatron: test_qwen3_4B_streaming_partial_rollout-rocm.py"
+        key: megatron-test-qwen3-4b-streaming-partial-rollout-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -352,11 +352,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_4B_streaming_partial_rollout.py"
+          TEST_FILE: "test_qwen3_4B_streaming_partial_rollout-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_moonlight_16B_A3B.py"
-        key: megatron-test-moonlight-16b-a3b
+      - label: ":warning: megatron: test_moonlight_16B_A3B-rocm.py"
+        key: megatron-test-moonlight-16b-a3b-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -366,11 +366,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_moonlight_16B_A3B.py"
+          TEST_FILE: "test_moonlight_16B_A3B-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_moonlight_16B_A3B_r3.py (enable_eval=0)"
-        key: megatron-test-moonlight-16b-a3b-r3
+      - label: ":warning: megatron: test_moonlight_16B_A3B_r3-rocm.py (enable_eval=0)"
+        key: megatron-test-moonlight-16b-a3b-r3-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -380,12 +380,12 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_moonlight_16B_A3B_r3.py"
+          TEST_FILE: "test_moonlight_16B_A3B_r3-rocm.py"
           NUM_GPUS: "8"
           VIME_TEST_ENABLE_EVAL: "0"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_mimo_7B_mtp_only_grad.py"
-        key: megatron-test-mimo-7b-mtp-only-grad
+      - label: ":warning: megatron: test_mimo_7B_mtp_only_grad-rocm.py"
+        key: megatron-test-mimo-7b-mtp-only-grad-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -395,11 +395,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_mimo_7B_mtp_only_grad.py"
+          TEST_FILE: "test_mimo_7B_mtp_only_grad-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_qwen2.5_0.5B_debug_rollout_then_train.py"
-        key: megatron-test-qwen2-5-0-5b-debug-rollout-then-train
+      - label: ":warning: megatron: test_qwen2.5_0.5B_debug_rollout_then_train-rocm.py"
+        key: megatron-test-qwen2-5-0-5b-debug-rollout-then-train-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -409,11 +409,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen2.5_0.5B_debug_rollout_then_train.py"
+          TEST_FILE: "test_qwen2.5_0.5B_debug_rollout_then_train-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_qwen2.5_0.5B_opd_vllm.py"
-        key: megatron-test-qwen2-5-0-5b-opd-vllm
+      - label: ":warning: megatron: test_qwen2.5_0.5B_opd_vllm-rocm.py"
+        key: megatron-test-qwen2-5-0-5b-opd-vllm-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -423,11 +423,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen2.5_0.5B_opd_vllm.py"
+          TEST_FILE: "test_qwen2.5_0.5B_opd_vllm-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_qwen3_4B_external_pd.py"
-        key: megatron-test-qwen3-4b-external-pd
+      - label: ":warning: megatron: test_qwen3_4B_external_pd-rocm.py"
+        key: megatron-test-qwen3-4b-external-pd-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -437,11 +437,11 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_4B_external_pd.py"
+          TEST_FILE: "test_qwen3_4B_external_pd-rocm.py"
           NUM_GPUS: "6"
         command: *rocm_gpu_test
-      - label: ":warning: megatron: test_qwen2.5_0.5B_fanout_short.py"
-        key: megatron-test-qwen2-5-0-5b-fanout-short
+      - label: ":warning: megatron: test_qwen2.5_0.5B_fanout_short-rocm.py"
+        key: megatron-test-qwen2-5-0-5b-fanout-short-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -451,7 +451,7 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen2.5_0.5B_fanout_short.py"
+          TEST_FILE: "test_qwen2.5_0.5B_fanout_short-rocm.py"
           NUM_GPUS: "4"
         command: *rocm_gpu_test
 
@@ -462,8 +462,8 @@ steps:
   - group: ":wrench: vime-customized"
     depends_on: gate-vime-customized
     steps:
-      - label: ":warning: vime-customized: test_qwen2_5_0_5B_non_colocate_pp.py"
-        key: vime-customized-test-qwen2-5-0-5b-non-colocate-pp
+      - label: ":warning: vime-customized: test_qwen2_5_0_5B_non_colocate_pp-rocm.py"
+        key: vime-customized-test-qwen2-5-0-5b-non-colocate-pp-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -473,7 +473,7 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen2_5_0_5B_non_colocate_pp.py"
+          TEST_FILE: "test_qwen2_5_0_5B_non_colocate_pp-rocm.py"
           NUM_GPUS: "4"
         command: *rocm_gpu_test
 
@@ -484,8 +484,8 @@ steps:
   - group: ":triangular_ruler: precision"
     depends_on: gate-precision
     steps:
-      - label: ":warning: precision: test_qwen3_0.6B_parallel_check.py"
-        key: precision-test-qwen3-0-6b-parallel-check
+      - label: ":warning: precision: test_qwen3_0.6B_parallel_check-rocm.py"
+        key: precision-test-qwen3-0-6b-parallel-check-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -495,7 +495,7 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_0.6B_parallel_check.py"
+          TEST_FILE: "test_qwen3_0.6B_parallel_check-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test
 
@@ -506,8 +506,8 @@ steps:
   - group: ":floppy_disk: ckpt"
     depends_on: gate-ckpt
     steps:
-      - label: ":warning: ckpt: test_qwen3_4B_ckpt.py --save-optimizer gpu --load-optimizer gpu"
-        key: ckpt-test-qwen3-4b-ckpt
+      - label: ":warning: ckpt: test_qwen3_4B_ckpt-rocm.py --save-optimizer gpu --load-optimizer gpu"
+        key: ckpt-test-qwen3-4b-ckpt-rocm
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -517,12 +517,12 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_4B_ckpt.py"
+          TEST_FILE: "test_qwen3_4B_ckpt-rocm.py"
           NUM_GPUS: "8"
           EXTRA_ARGS: "--save-optimizer gpu --load-optimizer gpu"
         command: *rocm_gpu_test
-      - label: ":warning: ckpt: test_qwen3_4B_ckpt.py --save-optimizer gpu --load-optimizer cpu"
-        key: ckpt-test-qwen3-4b-ckpt-2
+      - label: ":warning: ckpt: test_qwen3_4B_ckpt-rocm.py --save-optimizer gpu --load-optimizer cpu"
+        key: ckpt-test-qwen3-4b-ckpt-rocm-2
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -532,12 +532,12 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_4B_ckpt.py"
+          TEST_FILE: "test_qwen3_4B_ckpt-rocm.py"
           NUM_GPUS: "8"
           EXTRA_ARGS: "--save-optimizer gpu --load-optimizer cpu"
         command: *rocm_gpu_test
-      - label: ":warning: ckpt: test_qwen3_4B_ckpt.py --save-optimizer cpu --load-optimizer cpu"
-        key: ckpt-test-qwen3-4b-ckpt-3
+      - label: ":warning: ckpt: test_qwen3_4B_ckpt-rocm.py --save-optimizer cpu --load-optimizer cpu"
+        key: ckpt-test-qwen3-4b-ckpt-rocm-3
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -547,12 +547,12 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_4B_ckpt.py"
+          TEST_FILE: "test_qwen3_4B_ckpt-rocm.py"
           NUM_GPUS: "8"
           EXTRA_ARGS: "--save-optimizer cpu --load-optimizer cpu"
         command: *rocm_gpu_test
-      - label: ":warning: ckpt: test_qwen3_4B_ckpt.py --save-optimizer cpu --load-optimizer gpu"
-        key: ckpt-test-qwen3-4b-ckpt-4
+      - label: ":warning: ckpt: test_qwen3_4B_ckpt-rocm.py --save-optimizer cpu --load-optimizer gpu"
+        key: ckpt-test-qwen3-4b-ckpt-rocm-4
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -562,12 +562,12 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_4B_ckpt.py"
+          TEST_FILE: "test_qwen3_4B_ckpt-rocm.py"
           NUM_GPUS: "8"
           EXTRA_ARGS: "--save-optimizer cpu --load-optimizer gpu"
         command: *rocm_gpu_test
-      - label: ":warning: ckpt: test_qwen3_4B_ckpt.py --async-save"
-        key: ckpt-test-qwen3-4b-ckpt-5
+      - label: ":warning: ckpt: test_qwen3_4B_ckpt-rocm.py --async-save"
+        key: ckpt-test-qwen3-4b-ckpt-rocm-5
         agents:
           queue: amd_gfx950
         timeout_in_minutes: 360
@@ -577,7 +577,7 @@ steps:
             - exit_status: -1  # agent lost
               limit: 2
         env:
-          TEST_FILE: "test_qwen3_4B_ckpt.py"
+          TEST_FILE: "test_qwen3_4B_ckpt-rocm.py"
           NUM_GPUS: "8"
           EXTRA_ARGS: "--async-save"
         command: *rocm_gpu_test

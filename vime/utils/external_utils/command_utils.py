@@ -136,9 +136,13 @@ def execute_train(
         # ROCm runs the train script directly against this head (see the is_rocm()
         # branch below) instead of `ray job submit`, so runtime-env env_vars never
         # reach the worker actors. Export extra_env_vars HERE, before `ray start`,
-        # so the head daemon and every actor forked from it inherit them.
-        head_env = {**extra_env_vars, **_parse_extra_env_vars(config.extra_env_vars)}
-        head_exports = "".join(f"export {k}={v} && " for k, v in head_env.items())
+        # so the head daemon and every actor forked from it inherit them. On CUDA
+        # env vars flow through `ray job submit --runtime-env-json`, so keep the
+        # `ray start` line identical to upstream and only prepend on ROCm.
+        head_exports = ""
+        if is_rocm():
+            head_env = {**extra_env_vars, **_parse_extra_env_vars(config.extra_env_vars)}
+            head_exports = "".join(f"export {k}={v} && " for k, v in head_env.items())
         exec_command(
             # will prevent ray from buffering stdout/stderr
             f"{head_exports}"

@@ -345,9 +345,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         url = f"{base}/inference/v1/generate"
         payload = {
             "model": args.hf_checkpoint,
-            # Copy: sample.tokens may alias prompt_ids and is later extended
-            # in-place with response tokens, which would mutate this payload.
-            "token_ids": list(prompt_ids),
+            "token_ids": prompt_ids,
             "sampling_params": inference_sampling_params,
         }
 

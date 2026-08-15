@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
-import json
 import sys
 from argparse import Namespace
 from contextlib import contextmanager
@@ -130,15 +129,12 @@ def _default_sampling_params(**overrides) -> dict:
 
 def _generate_response(token_ids: list[int] | None = None) -> dict:
     tids = token_ids or [50, 51]
-    # One logprob per token (the code enforces len(log_probs) == len(tokens)).
-    # Use -0.1, -0.2, ... so the 2-token default keeps its historical values.
-    content = [{"logprob": round(-0.1 * (i + 1), 10)} for i in range(len(tids))]
     return {
         "choices": [
             {
                 "token_ids": tids,
                 "finish_reason": "stop",
-                "logprobs": {"content": content},
+                "logprobs": {"content": [{"logprob": -0.1}, {"logprob": -0.2}]},
             }
         ],
         "usage": {"prompt_tokens": 3, "completion_tokens": len(tids)},
@@ -658,38 +654,10 @@ def test_eval_rollout_passk_requests_do_not_share_session_ids(patch_generate_sta
 
     monkeypatch.setattr(mod, "generate_and_rm", fake_generate_and_rm)
     monkeypatch.setattr(mod, "EVAL_PROMPT_DATASET", {})
-    # The dataset cache is pre-seeded below, but the real cache_key includes
-    # more fields than this test reconstructs, so eval_rollout_single_dataset
-    # may fall through to building a Dataset (which loads a tokenizer from the
-    # fake hf_checkpoint). Stub the HF loads so no real repo/path is resolved.
-    monkeypatch.setattr(mod, "load_tokenizer", lambda *a, **k: None)
-    monkeypatch.setattr(mod, "load_processor", lambda *a, **k: None)
 
     args = _rollout_args()
     dataset_cfg = EvalDatasetConfig(name="eval", path="/tmp/eval.jsonl", n_samples_per_eval_prompt=2)
-    # Must match the cache_key that eval_rollout_single_dataset builds, else it
-    # falls through and tries to load the dataset from the (nonexistent) path.
-    eval_apply_chat_template = (
-        dataset_cfg.apply_chat_template
-        if dataset_cfg.apply_chat_template is not None
-        else args.apply_chat_template
-    )
-    eval_multimodal_keys = (
-        dataset_cfg.multimodal_keys if dataset_cfg.multimodal_keys is not None else args.multimodal_keys
-    )
-    eval_apply_chat_template_kwargs = (
-        dataset_cfg.apply_chat_template_kwargs
-        if dataset_cfg.apply_chat_template_kwargs is not None
-        else args.apply_chat_template_kwargs
-    )
-    cache_key = dataset_cfg.cache_key + (
-        args.hf_checkpoint,
-        eval_apply_chat_template,
-        json.dumps(eval_multimodal_keys, sort_keys=True) if eval_multimodal_keys is not None else None,
-        json.dumps(eval_apply_chat_template_kwargs, sort_keys=True)
-        if eval_apply_chat_template_kwargs is not None
-        else None,
-    )
+    cache_key = dataset_cfg.cache_key + (args.hf_checkpoint, args.apply_chat_template)
     mod.EVAL_PROMPT_DATASET[cache_key] = type("DummyDataset", (), {"samples": [Sample(prompt="prompt")]})()
 
     result = asyncio.run(mod.eval_rollout_single_dataset(args, rollout_id=0, dataset_cfg=dataset_cfg))
