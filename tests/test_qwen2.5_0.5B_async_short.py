@@ -5,15 +5,31 @@ MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
 NUM_GPUS = 4
 
+# ROCm converts HF->Megatron (no modelopt bridge) into the host-mounted
+# models dir, so the converted checkpoint is cached and reused across runs.
+MG_PATH = f"/root/models/{MODEL_NAME}_torch_dist"
+
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
 
+    if U.is_rocm():
+        U.convert_checkpoint(
+            model_name=MODEL_NAME,
+            megatron_model_type=MODEL_TYPE,
+            num_gpus_per_node=1,
+            extra_args="--no-gradient-accumulation-fusion --attention-backend flash",
+            dir_dst="/root/models",
+        )
+
 
 def execute():
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
+    if U.is_rocm():
+        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {MG_PATH}/ "
+    else:
+        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
@@ -85,7 +101,8 @@ def execute():
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 1 "
         "--rollout-num-gpus 3 "
-        "--megatron-to-hf-mode bridge "
+        f'{"--megatron-to-hf-mode bridge " if not U.is_rocm() else ""}'
+        f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
     )
 
     train_args = (

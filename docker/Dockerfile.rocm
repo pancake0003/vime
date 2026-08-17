@@ -193,27 +193,15 @@ RUN --mount=type=cache,target=/root/.cache/ccache \
 # ======================================== vime ===============================
 FROM aiter AS install_vime
 
-# Use vime's mainline Megatron (NVIDIA/Megatron-LM at ${MEGATRON_COMMIT}) plus the
-# AMD megatron.patch under docker/amd_patch/${PATCH_VERSION}/.
+# Use ROCm's Megatron-LM fork (ROCm/Megatron-LM), which already carries the AMD
+# changes previously applied via docker/amd_patch/*.patch on top of NVIDIA's tree.
 # The ROCm fork-after-HIP-init checkpoint segfault is handled at runtime by
 # vime.utils.rocm_checkpoint_writer.
-ARG PATCH_VERSION=latest
-ARG MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
+ARG MEGATRON_REPO=https://github.com/ROCm/Megatron-LM.git
+ARG MEGATRON_COMMIT=fb4552449f9b33c6f72207a80e80045eadf5267e
 RUN --mount=type=cache,target=/root/.cache/pip \
-    git clone https://github.com/NVIDIA/Megatron-LM.git --recursive /root/Megatron-LM && \
-    cd /root/Megatron-LM && git checkout ${MEGATRON_COMMIT}
-
-COPY docker/amd_patch/${PATCH_VERSION}/megatron.patch /root/Megatron-LM/
-COPY docker/amd_patch/${PATCH_VERSION}/amd_megatron_fused_kernels_init.patch /root/Megatron-LM/
-RUN cd /root/Megatron-LM && \
-    git update-index --refresh && \
-    git apply megatron.patch --3way && \
-    git apply amd_megatron_fused_kernels_init.patch --3way && \
-    if grep -R -n '^<<<<<<< ' .; then \
-      echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-      exit 1; \
-    fi && \
-    rm megatron.patch amd_megatron_fused_kernels_init.patch && \
+    git clone ${MEGATRON_REPO} --recursive /root/Megatron-LM && \
+    cd /root/Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
     pip install -e .
 
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -227,6 +215,41 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@d64a639 \
         --no-cache-dir --force-reinstall
+
+# ---- Build ROCm UCX 1.19.x (image ships only UCX 1.12.1 runtime, no headers) ----
+RUN --mount=target=/var/lib/apt/lists,type=cache,sharing=locked \
+    --mount=target=/var/cache/apt,type=cache,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake pkg-config libcxxopts-dev libaio-dev liburing-dev \
+        autoconf automake libtool
+
+RUN git clone --depth 1 -b v1.19.x https://github.com/ROCm/ucx.git /tmp/ucx && \
+    cd /tmp/ucx && ./autogen.sh && \
+    ./configure --prefix=/opt/ucx \
+        --enable-shared --disable-static --disable-doxygen-doc \
+        --enable-optimizations --enable-devel-headers \
+        --with-rocm=/opt/rocm --with-verbs --with-dm --enable-mt && \
+    make -j"$(nproc)" && make install && \
+    rm -rf /tmp/ucx
+
+# ---- Build + install RIXL (ROCm NIXL) -> provides the `rixl` python module ----
+# Fixes vs. upstream RIXL build:
+#   - install meson-python (the `mesonpy` PEP 517 backend, needed with --no-build-isolation)
+#   - drop the prometheus-cpp subproject: its libcore.so installs to {prefix}/lib,
+#     which meson-python cannot map into a wheel
+#   - use unpinned meson so meson-python is new enough for PEP 639 license metadata
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install meson meson-python "pybind11[global]" ninja patchelf pyproject-metadata tomlkit && \
+    git clone --depth 1 https://github.com/ROCm/rixl.git /tmp/rixl && \
+    cd /tmp/rixl && \
+    rm -f subprojects/prometheus-cpp.wrap && \
+    pip3 install . --no-build-isolation \
+        --config-settings=setup-args="-Ducx_path=/opt/ucx" \
+        --config-settings=setup-args="-Drocm_path=/opt/rocm" && \
+    rm -rf /tmp/rixl
+
+# Make the RIXL/UCX 1.19 libs win at runtime over the old system UCX 1.12.
+ENV LD_LIBRARY_PATH=/opt/ucx/lib:${LD_LIBRARY_PATH}
 
 COPY requirements.txt /tmp/vime-requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \

@@ -12,30 +12,35 @@ existing 0.5B short tests.
 import os
 import vime.utils.external_utils.command_utils as U
 
-
 MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
 NUM_GPUS = 4
 
+HF_PATH = f"/root/models/{MODEL_NAME}"
+# ROCm converts HF->Megatron (no modelopt bridge) into the host-mounted
+# models dir, so the converted checkpoint is cached and reused across runs.
+MG_PATH = f"/root/models/{MODEL_NAME}_torch_dist"
+
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir {HF_PATH}")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
     if U.is_rocm():
-        # ROCm image has no modelopt bridge: convert HF->Megatron into a container-local dir.
+        # ROCm image has no modelopt bridge: convert HF->Megatron into the
+        # host-mounted models dir so the checkpoint is cached and reused across runs.
         U.convert_checkpoint(
             MODEL_NAME,
             MODEL_TYPE,
             num_gpus_per_node=1,
             extra_args="--no-gradient-accumulation-fusion --attention-backend flash",
-            dir_dst="/tmp",
+            dir_dst="/root/models",
         )
 
 
 def execute():
     if U.is_rocm():
-        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ --ref-load /tmp/{MODEL_NAME}_torch_dist/ "
+        ckpt_args = f"--hf-checkpoint {HF_PATH}/ --ref-load {MG_PATH}/ "
     else:
         ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
@@ -90,8 +95,8 @@ def execute():
 
     vllm_args = (
         "--rollout-num-gpus-per-engine 1 "
-        "--vllm-gpu-memory-utilization 0.65 "
-        "--vllm-max-cudagraph-capture-size 16 "
+        f"--vllm-gpu-memory-utilization {'0.3' if U.is_rocm() else '0.65'} "
+        f"{'' if U.is_rocm() else '--vllm-max-cudagraph-capture-size 16 '}"
     )
 
     ci_args = "--ci-test "
