@@ -1894,6 +1894,10 @@ def vime_validate_args(args):
         args.offload_rollout = True
     del args.offload
 
+    # Capture explicit --no-offload-train (BooleanOptionalAction: None=unset, False=user-disabled)
+    # before the None->False default below erases the distinction.
+    _user_disabled_offload_train = args.offload_train is False
+
     if args.debug_rollout_only:
         if args.colocate and args.rollout_num_gpus is None:
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
@@ -1951,7 +1955,20 @@ def vime_validate_args(args):
         args.offload_rollout = False
 
     if args.use_critic:
-        args.offload_train = True
+        # PPO's critic normally forces train offload. On ROCm, torch_memory_saver's
+        # offload allocations are unresolvable by hipPointerGetAttribute, so any
+        # torch.compile/Triton kernel touching them dies with "cannot be accessed
+        # from Triton". Honor an explicit --no-offload-train there to keep weights in
+        # plain hipMalloc memory (Qwen3-4B-class critics fit without offload).
+        import torch
+
+        if torch.version.hip is not None and _user_disabled_offload_train:
+            logger.info(
+                "ROCm + explicit --no-offload-train: not force-enabling train offload for the critic "
+                "(avoids torch_memory_saver VMM memory that Triton cannot resolve)."
+            )
+        else:
+            args.offload_train = True
 
     if args.offload_train:
         args.disable_grad_buffers_cpu_backup = True

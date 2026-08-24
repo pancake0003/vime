@@ -121,6 +121,12 @@ megatron:
 
     ci_args = "--ci-test "
 
+    # Colocated CUDA-IPC weight transfer (UpdateWeightFromTensor) on both CUDA and
+    # ROCm. On ROCm, --no-offload-train (honored for the critic via arguments.py)
+    # keeps the trainer's weights in plain hipMalloc memory that hipIpcOpenMemHandle
+    # can map and that Triton can resolve, so no disk-transport fallback is needed.
+    weight_transport_args = ""
+
     misc_args = (
         # default dropout in megatron is 0.1
         "--attention-dropout 0.0 "
@@ -147,6 +153,7 @@ megatron:
         f"{eval_args} "
         f"{vllm_args} "
         f"{ci_args} "
+        f"{weight_transport_args} "
         f"{misc_args} "
     )
 
@@ -154,12 +161,6 @@ megatron:
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
-        # ROCm: torch.compile→inductor→Triton crashes on gfx950 for the small
-        # autotune-benchmarked kernels ("Pointer argument ... cannot be accessed
-        # from Triton"). It's hit via Megatron jit_fuser, TE jit_fuser, AND vime's
-        # own @torch.compile in ppo_utils.py. TORCH_COMPILE_DISABLE=1 no-ops ALL
-        # torch.compile globally (falls back to eager) — one systemic switch.
-        extra_env_vars={"TORCH_COMPILE_DISABLE": "1"} if U.is_rocm() else {},
     )
 
 
