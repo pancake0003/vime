@@ -132,7 +132,11 @@ megatron:
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 8 "
         "--colocate "
-        f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
+        # ROCm: --no-offload-rollout keeps vLLM sleep-mode (cumem allocator) off, so
+        # the IPC weight transfer loads into stable VRAM instead of memory remapped by
+        # the sleep/wake cycle. Works around the known IPC-after-VMM-remap corruption
+        # that produced NaN logits (stalling eval in a nan-JSON retry loop). Compile ON.
+        f'{"--no-gradient-accumulation-fusion --no-offload-train --no-offload-rollout " if U.is_rocm() else ""}'
     )
 
     train_args = (

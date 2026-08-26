@@ -157,12 +157,6 @@ megatron:
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
-        # ROCm: torch.compile→inductor→Triton crashes on gfx950 for the small
-        # autotune-benchmarked kernels ("Pointer argument ... cannot be accessed
-        # from Triton"), hit via Megatron jit_fuser, TE jit_fuser, AND vime's own
-        # @torch.compile in ppo_utils.py (this test trains a PPO critic).
-        # TORCH_COMPILE_DISABLE=1 no-ops ALL torch.compile globally (eager fallback).
-        extra_env_vars={"TORCH_COMPILE_DISABLE": "1"} if U.is_rocm() else {},
     )
 
 

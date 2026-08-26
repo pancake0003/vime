@@ -204,6 +204,54 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     cd /root/Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
     pip install -e .
 
+# Register the --use-gated-attention CLI arg. The NVIDIA build added it via
+# docker/patch/*/megatron.patch (group.add_argument('--use-gated-attention', ...)
+# in _add_network_size_args); the ROCm fork implements gated attention only via
+# the attention_output_gate config field / --attention-output-gate flag and never
+# registered this alias. The Qwen3.5 / Qwen3-Next model scripts pass
+# --use-gated-attention in MODEL_ARGS (to both convert_hf_to_torch_dist.py and
+# train.py), so without it argparse rejects the flag. Insert it before the
+# --openai-gelu arg, matching the original patch location. Idempotent.
+RUN python3 - <<'PY'
+import pathlib, sys
+f = pathlib.Path("/root/Megatron-LM/megatron/training/arguments.py")
+src = f.read_text()
+if "--use-gated-attention" in src:
+    print("--use-gated-attention already registered")
+else:
+    anchor = "    group.add_argument('--openai-gelu', action='store_true',"
+    if anchor not in src:
+        sys.exit("arguments.py: --openai-gelu anchor not found; cannot insert --use-gated-attention")
+    inject = (
+        "    group.add_argument('--use-gated-attention', action='store_true',\n"
+        "                       help='If set, use gated attention as in Qwen3Next')\n"
+    )
+    src = src.replace(anchor, inject + anchor, 1)
+    f.write_text(src)
+    print("--use-gated-attention registered before --openai-gelu")
+PY
+
+# load_common_state_dict uses torch.load(map_location='cpu') with PyTorch's
+# weights_only default, which is True since torch 2.6. The Megatron common.pt
+# carries non-tensor globals (e.g. vllm.config.mamba.MambaBackendEnum via vime's
+# args), so weights_only=True raises UnpicklingError when --release-train reloads
+# a saved checkpoint. The NVIDIA build set weights_only=False here via
+# docker/patch/*/megatron.patch; the ROCm fork lacks it. Re-apply. Idempotent.
+RUN python3 - <<'PY'
+import pathlib, sys
+f = pathlib.Path("/root/Megatron-LM/megatron/core/dist_checkpointing/strategies/common.py")
+src = f.read_text()
+target = "return torch.load(load_path, map_location='cpu')"
+patched = "return torch.load(load_path, map_location='cpu', weights_only=False)"
+if patched in src:
+    print("load_common torch.load already weights_only=False")
+elif target in src:
+    f.write_text(src.replace(target, patched, 1))
+    print("load_common torch.load patched to weights_only=False")
+else:
+    sys.exit("common.py: torch.load(load_path, map_location='cpu') target not found")
+PY
+
 # Critic value-head load parity with the CUDA image. The NVIDIA build applies
 # docker/patch/*/megatron.patch, which makes MCoreLoadPlanner._validate_global_shapes
 # SKIP model keys absent from the checkpoint instead of raising KeyError. The
