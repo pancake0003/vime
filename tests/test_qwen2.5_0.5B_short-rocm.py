@@ -15,21 +15,17 @@ def prepare():
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
 
-    if U.is_rocm():
-        U.convert_checkpoint(
-            model_name=MODEL_NAME,
-            megatron_model_type=MODEL_TYPE,
-            num_gpus_per_node=1,
-            extra_args="--no-gradient-accumulation-fusion --attention-backend flash",
-            dir_dst="/root/models",
-        )
+    U.convert_checkpoint(
+        model_name=MODEL_NAME,
+        megatron_model_type=MODEL_TYPE,
+        num_gpus_per_node=1,
+        extra_args="--no-gradient-accumulation-fusion --attention-backend flash",
+        dir_dst="/root/models",
+    )
 
 
 def execute():
-    if U.is_rocm():
-        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {MG_PATH}/ "
-    else:
-        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load {MG_PATH}/ "
 
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
@@ -99,8 +95,7 @@ def execute():
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 4 "
         "--colocate "
-        f'{"--megatron-to-hf-mode bridge " if not U.is_rocm() else ""}'
-        f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
+        "--no-gradient-accumulation-fusion --no-offload-train --no-offload-rollout "
     )
 
     train_args = (

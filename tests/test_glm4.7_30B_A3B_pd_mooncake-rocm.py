@@ -7,6 +7,13 @@ import yaml
 
 import vime.utils.external_utils.command_utils as U
 
+# The slime sync (#386) removed command_utils.is_rocm(); these ROCm test files
+# still gate on U.is_rocm(). Re-provide it here (test-file only, merge-safe).
+if not hasattr(U, "is_rocm"):
+    import torch as _torch
+
+    U.is_rocm = lambda: _torch.version.hip is not None
+
 
 MODEL_REPO = "zai-org/GLM-4.7-Flash"
 MODEL_NAME = "GLM-4.7-Flash"

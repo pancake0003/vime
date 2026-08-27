@@ -44,6 +44,13 @@ import tempfile
 
 import vime.utils.external_utils.command_utils as U
 
+# The slime sync (#386) removed command_utils.is_rocm(); these ROCm test files
+# still gate on U.is_rocm(). Re-provide it here (test-file only, merge-safe).
+if not hasattr(U, "is_rocm"):
+    import torch as _torch
+
+    U.is_rocm = lambda: _torch.version.hip is not None
+
 
 MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
@@ -183,7 +190,7 @@ def execute():
         "--actor-num-gpus-per-node 4 "
         "--colocate "
         f'{"--megatron-to-hf-mode bridge " if not U.is_rocm() else ""}'
-        f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
+        f'{"--no-gradient-accumulation-fusion --no-offload-train --no-offload-rollout " if U.is_rocm() else ""}'
     )
 
     train_args = (

@@ -25,6 +25,13 @@ from pathlib import Path
 
 import vime.utils.external_utils.command_utils as U
 
+# The slime sync (#386) removed command_utils.is_rocm(); these ROCm test files
+# still gate on U.is_rocm(). Re-provide it here (test-file only, merge-safe).
+if not hasattr(U, "is_rocm"):
+    import torch as _torch
+
+    U.is_rocm = lambda: _torch.version.hip is not None
+
 MODEL_NAME = "Qwen3-4B"
 MODEL_TYPE = "qwen3-4B"
 TORCH_DIST_CKPT = f"/root/models/{MODEL_NAME}_torch_dist"

@@ -1,6 +1,13 @@
 import os
 import vime.utils.external_utils.command_utils as U
 
+# The slime sync (#386) removed command_utils.is_rocm(); these ROCm test files
+# still gate on U.is_rocm(). Re-provide it here (test-file only, merge-safe).
+if not hasattr(U, "is_rocm"):
+    import torch as _torch
+
+    U.is_rocm = lambda: _torch.version.hip is not None
+
 ENABLE_EVAL = bool(int(os.environ.get("VIME_TEST_ENABLE_EVAL", "1")))
 
 MODEL_NAME = "Moonlight-16B-A3B-Instruct"
