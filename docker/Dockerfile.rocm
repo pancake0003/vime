@@ -193,28 +193,186 @@ RUN --mount=type=cache,target=/root/.cache/ccache \
 # ======================================== vime ===============================
 FROM aiter AS install_vime
 
-# Use vime's mainline Megatron (NVIDIA/Megatron-LM at ${MEGATRON_COMMIT}) plus the
-# AMD megatron.patch under docker/amd_patch/${PATCH_VERSION}/.
+# Use ROCm's Megatron-LM fork (ROCm/Megatron-LM), which already carries the AMD
+# changes previously applied via docker/amd_patch/*.patch on top of NVIDIA's tree.
 # The ROCm fork-after-HIP-init checkpoint segfault is handled at runtime by
 # vime.utils.rocm_checkpoint_writer.
-ARG PATCH_VERSION=latest
-ARG MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
+ARG MEGATRON_REPO=https://github.com/ROCm/Megatron-LM.git
+ARG MEGATRON_COMMIT=fb4552449f9b33c6f72207a80e80045eadf5267e
 RUN --mount=type=cache,target=/root/.cache/pip \
-    git clone https://github.com/NVIDIA/Megatron-LM.git --recursive /root/Megatron-LM && \
-    cd /root/Megatron-LM && git checkout ${MEGATRON_COMMIT}
-
-COPY docker/amd_patch/${PATCH_VERSION}/megatron.patch /root/Megatron-LM/
-COPY docker/amd_patch/${PATCH_VERSION}/amd_megatron_fused_kernels_init.patch /root/Megatron-LM/
-RUN cd /root/Megatron-LM && \
-    git update-index --refresh && \
-    git apply megatron.patch --3way && \
-    git apply amd_megatron_fused_kernels_init.patch --3way && \
-    if grep -R -n '^<<<<<<< ' .; then \
-      echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-      exit 1; \
-    fi && \
-    rm megatron.patch amd_megatron_fused_kernels_init.patch && \
+    git clone ${MEGATRON_REPO} --recursive /root/Megatron-LM && \
+    cd /root/Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
     pip install -e .
+
+# Register the --use-gated-attention CLI arg. The NVIDIA build added it via
+# docker/patch/*/megatron.patch (group.add_argument('--use-gated-attention', ...)
+# in _add_network_size_args); the ROCm fork implements gated attention only via
+# the attention_output_gate config field / --attention-output-gate flag and never
+# registered this alias. The Qwen3.5 / Qwen3-Next model scripts pass
+# --use-gated-attention in MODEL_ARGS (to both convert_hf_to_torch_dist.py and
+# train.py), so without it argparse rejects the flag. Insert it before the
+# --openai-gelu arg, matching the original patch location. Idempotent.
+RUN python3 - <<'PY'
+import pathlib, sys
+f = pathlib.Path("/root/Megatron-LM/megatron/training/arguments.py")
+src = f.read_text()
+if "--use-gated-attention" in src:
+    print("--use-gated-attention already registered")
+else:
+    anchor = "    group.add_argument('--openai-gelu', action='store_true',"
+    if anchor not in src:
+        sys.exit("arguments.py: --openai-gelu anchor not found; cannot insert --use-gated-attention")
+    inject = (
+        "    group.add_argument('--use-gated-attention', action='store_true',\n"
+        "                       help='If set, use gated attention as in Qwen3Next')\n"
+    )
+    src = src.replace(anchor, inject + anchor, 1)
+    f.write_text(src)
+    print("--use-gated-attention registered before --openai-gelu")
+PY
+
+# load_common_state_dict uses torch.load(map_location='cpu') with PyTorch's
+# weights_only default, which is True since torch 2.6. The Megatron common.pt
+# carries non-tensor globals (e.g. vllm.config.mamba.MambaBackendEnum via vime's
+# args), so weights_only=True raises UnpicklingError when --release-train reloads
+# a saved checkpoint. The NVIDIA build set weights_only=False here via
+# docker/patch/*/megatron.patch; the ROCm fork lacks it. Re-apply. Idempotent.
+RUN python3 - <<'PY'
+import pathlib, sys
+f = pathlib.Path("/root/Megatron-LM/megatron/core/dist_checkpointing/strategies/common.py")
+src = f.read_text()
+target = "return torch.load(load_path, map_location='cpu')"
+patched = "return torch.load(load_path, map_location='cpu', weights_only=False)"
+if patched in src:
+    print("load_common torch.load already weights_only=False")
+elif target in src:
+    f.write_text(src.replace(target, patched, 1))
+    print("load_common torch.load patched to weights_only=False")
+else:
+    sys.exit("common.py: torch.load(load_path, map_location='cpu') target not found")
+PY
+
+# Critic value-head load parity with the CUDA image. The NVIDIA build applies
+# docker/patch/*/megatron.patch, which makes MCoreLoadPlanner._validate_global_shapes
+# SKIP model keys absent from the checkpoint instead of raising KeyError. The
+# critic's output_layer.weight (scalar value head) is legitimately not in an
+# actor-derived --ref-load checkpoint; vime reinitializes it after load
+# (vime/backends/megatron_utils/model.py). Without this, the ROCm Megatron fork
+# hard-raises `KeyError: 'output_layer.weight'` before that reinit can run.
+# Applied as an idempotent in-place edit (the fork's line numbers differ from
+# NVIDIA's, so a .patch would not apply cleanly).
+RUN python3 - <<'PY'
+import re, pathlib, sys
+f = pathlib.Path("/root/Megatron-LM/megatron/core/dist_checkpointing/strategies/torch.py")
+src = f.read_text()
+
+# Hunk 1: _validate_global_shapes raises KeyError for any model key absent from
+# the checkpoint. The critic value head (output_layer.weight/bias) is legitimately
+# absent from an actor-derived --ref-load checkpoint; vime reinitializes it after
+# load (vime/backends/megatron_utils/model.py). We SCOPE the skip to only that
+# head — any OTHER missing key still raises, so a genuinely broken checkpoint is
+# still caught (stricter than CUDA's blanket skip). Shape validation for keys that
+# ARE present is left untouched.
+pat = re.compile(
+    r"(\n(?P<i>[ \t]+)if sh_ten\.key not in metadata\.state_dict_metadata:\n)"
+    r"(?P<body>(?:[ \t]+raise KeyError\((?:.*?\n)*?[ \t]+\)\n))",
+)
+def repl(m):
+    i = m.group("i")
+    inner = i + " " * 4
+    return (
+        m.group(1)
+        + f'{inner}if sh_ten.key.endswith("output_layer.weight") or sh_ten.key.endswith("output_layer.bias"):\n'
+        + f'{inner}    print(f"{{sh_ten.key}} (critic value head) not in checkpoint, will skip and reinit")\n'
+        + f"{inner}    continue\n"
+        + m.group("body")  # keep the original `raise KeyError(...)` for every other key
+    )
+new, n = pat.subn(repl, src)
+if n == 1:
+    print("megatron _validate_global_shapes patched (critic output_layer skip, others still fatal)")
+elif "critic value head" in src:
+    n = 1  # already patched
+else:
+    sys.exit(f"megatron _validate_global_shapes patch: expected 1 match, found {n}")
+
+# Hunk 2: _temporarily_bypass_shape_validation builds a list over
+# allow_shape_mismatch_sharded_tensors and indexes tensor_metadata[key]; when the
+# critic head is absent this raises KeyError before the reinit path runs. Guard the
+# comprehension so an absent allow-mismatch key is skipped instead of raising.
+pat2 = re.compile(
+    r"(for key, sharded_tensor in self\.allow_shape_mismatch_sharded_tensors\.items\(\))(\n)"
+)
+new2, n2 = pat2.subn(r"\1 if key in tensor_metadata\2", new)
+if n2 == 1:
+    print("megatron _temporarily_bypass_shape_validation patched (skip missing allow-mismatch keys)")
+elif "if key in tensor_metadata" in new:
+    n2 = 1  # already patched
+else:
+    sys.exit(f"megatron bypass-shape-validation patch: expected 1 match, found {n2}")
+
+# Hunk 3: the actual load goes through PyTorch DCP, whose
+# create_default_local_load_plan raises RuntimeError("Missing key in checkpoint
+# state_dict") for any model key absent from the checkpoint unless the planner is
+# constructed with allow_partial_load=True. Pass it through MCoreLoadPlanner's
+# **kwargs. SAFE because create_local_plan() runs our scoped _validate_global_shapes
+# FIRST (raises for any non-critic missing key) before DCP's planner is reached, so
+# this only lets the critic head through.
+pat3 = re.compile(
+    r"(MCoreLoadPlanner\(\n"
+    r"(?P<i>[ \t]+)shapes_validation_sharded_tensors=flexible_shape_sharded_tensors,\n"
+    r"[ \t]+allow_shape_mismatch_sharded_tensors=allow_shape_mismatch_sharded_tensors,\n)"
+    r"(?P<close>[ \t]+\),)"
+)
+def repl3(m):
+    return m.group(1) + f'{m.group("i")}allow_partial_load=True,\n' + m.group("close")
+new3, n3 = pat3.subn(repl3, new2)
+if n3 == 1:
+    print("megatron MCoreLoadPlanner patched (allow_partial_load=True)")
+elif "allow_partial_load=True" in new2:
+    n3 = 1  # already patched
+else:
+    sys.exit(f"megatron allow_partial_load patch: expected 1 match, found {n3}")
+
+f.write_text(new3)
+PY
+
+# vLLM ROCm platform: _sync_hip_cuda_env_vars() raises when HIP_VISIBLE_DEVICES and
+# CUDA_VISIBLE_DEVICES are both set to different values. Under Ray, the vLLM engine
+# actor gets HIP set per-actor by Ray (e.g. '1') while CUDA_VISIBLE_DEVICES is
+# inherited from vime's train context (e.g. '0,1,2,3'), so the two legitimately
+# differ and vLLM aborts. Fix: DON'T raise, and DON'T overwrite either var — just
+# let the mismatch stand. vime manages device placement itself, and overwriting
+# CUDA_VISIBLE_DEVICES here corrupts vime's own get_local_gpu_id() (train_actor.py
+# splits CUDA_VISIBLE_DEVICES to compute local rank) and rebinds the vLLM worker's
+# device mid-collective (suspected cause of the weight-transfer ordering hang /
+# GPU crash on TP>1 tests). Turn the whole raise block into a no-op pass; the two
+# elif branches below still fill a genuinely-unset var. Idempotent.
+RUN python3 - <<'PY'
+import re, pathlib, sys
+f = pathlib.Path("/workspace/vllm/vllm/platforms/rocm.py")
+src = f.read_text()
+pat = re.compile(
+    r"(\n(?P<i>[ \t]+)if hip_val != cuda_val:\n)"
+    r"(?P<body>(?:[ \t]+raise ValueError\((?:.*?\n)*?[ \t]+\)\n))",
+)
+def repl(m):
+    inner = m.group("i") + " " * 4
+    return (
+        m.group(1)
+        + f'{inner}# vime: leave both as-is; vime manages device placement and\n'
+        + f'{inner}# overwriting CUDA_VISIBLE_DEVICES corrupts local-rank calc /\n'
+        + f'{inner}# rebinds the vLLM worker mid-collective.\n'
+        + f"{inner}pass\n"
+    )
+new, n = pat.subn(repl, src)
+if n == 1:
+    print("vllm rocm _sync_hip_cuda_env_vars patched (no-op mismatch, no overwrite)")
+elif "leave both as-is" in src:
+    n = 1  # already patched
+else:
+    sys.exit(f"vllm rocm sync patch: expected 1 match, found {n}")
+f.write_text(new)
+PY
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --ignore-installed PyJWT && \
@@ -225,6 +383,41 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@d64a639 \
         --no-cache-dir --force-reinstall
+
+# ---- Build ROCm UCX 1.19.x (image ships only UCX 1.12.1 runtime, no headers) ----
+RUN --mount=target=/var/lib/apt/lists,type=cache,sharing=locked \
+    --mount=target=/var/cache/apt,type=cache,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake pkg-config libcxxopts-dev libaio-dev liburing-dev \
+        autoconf automake libtool
+
+RUN git clone --depth 1 -b v1.19.x https://github.com/ROCm/ucx.git /tmp/ucx && \
+    cd /tmp/ucx && ./autogen.sh && \
+    ./configure --prefix=/opt/ucx \
+        --enable-shared --disable-static --disable-doxygen-doc \
+        --enable-optimizations --enable-devel-headers \
+        --with-rocm=/opt/rocm --with-verbs --with-dm --enable-mt && \
+    make -j"$(nproc)" && make install && \
+    rm -rf /tmp/ucx
+
+# ---- Build + install RIXL (ROCm NIXL) -> provides the `rixl` python module ----
+# Fixes vs. upstream RIXL build:
+#   - install meson-python (the `mesonpy` PEP 517 backend, needed with --no-build-isolation)
+#   - drop the prometheus-cpp subproject: its libcore.so installs to {prefix}/lib,
+#     which meson-python cannot map into a wheel
+#   - use unpinned meson so meson-python is new enough for PEP 639 license metadata
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install meson meson-python "pybind11[global]" ninja patchelf pyproject-metadata tomlkit && \
+    git clone --depth 1 https://github.com/ROCm/rixl.git /tmp/rixl && \
+    cd /tmp/rixl && \
+    rm -f subprojects/prometheus-cpp.wrap && \
+    pip3 install . --no-build-isolation \
+        --config-settings=setup-args="-Ducx_path=/opt/ucx" \
+        --config-settings=setup-args="-Drocm_path=/opt/rocm" && \
+    rm -rf /tmp/rixl
+
+# Make the RIXL/UCX 1.19 libs win at runtime over the old system UCX 1.12.
+ENV LD_LIBRARY_PATH=/opt/ucx/lib:${LD_LIBRARY_PATH}
 
 COPY requirements.txt /tmp/vime-requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -242,6 +435,12 @@ ENV CUDA_DEVICE_MAX_CONNECTIONS=1
 ENV HSA_NO_SCRATCH_RECLAIM=1
 ENV VLLM_ROCM_USE_AITER=1
 ENV PYTHONPATH=/root/vime:/root/Megatron-LM
+# test_qwen2.5_0.5B_fanout_short reads this from os.environ inside the rollout
+# manager Ray actor (via vime/rollout/_fanout_test_helpers.py) to record that the
+# custom-generate path fired. The actor inherits the image env, and the test's
+# default path matches this, so the driver and actor agree without a shared-code
+# change. Harmless for every other test/workload (they never read it).
+ENV VIME_FANOUT_TEST_COUNTER_FILE=/tmp/vime_fanout_test_counter.log
 
 RUN python3 -c "\
 import vllm, vime; \
