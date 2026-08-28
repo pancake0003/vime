@@ -70,10 +70,58 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip "setuptools<80" wheel numpy einops packaging psutil ninja build pybind11 && \
     pip install /opt/rocm/share/amd_smi
 
+# torch 2.11 (nightly rocm7.0). The synced vime code needs a vLLM new enough to expose
+# WeightTransferTrainerFactory; that vLLM's stable-ABI kernels (csrc/libtorch_stable/
+# cuda_view.cu) use torch::stable::Tensor::layout()/device() + a from_blob overload that
+# only exist in PyTorch 2.11's stable ABI. Stable rocm7.0 tops out at torch 2.10 (whose
+# stable headers lack those methods), so pin the 2.11 nightly wheel. torchaudio dropped
+# (unused by vime/vLLM); torchvision kept for vLLM multimodal.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip3 install --index-url https://download.pytorch.org/whl/rocm7.0 \
+    pip3 install --index-url https://download.pytorch.org/whl/nightly/rocm7.0 \
       --extra-index-url https://pypi.org/simple \
-      torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0
+      torch==2.11.0.dev20260206+rocm7.0 torchvision==0.26.0.dev20260216+rocm7.0
+
+# torch 2.11 (pip nightly rocm7.0) dropped the ATen/c10 c10::hip::*MasqueradingAsCUDA
+# stream/guard/allocator headers. TransformerEngine's hipify still emits those names
+# (at::cuda::getCurrentCUDAStream -> c10::hip::getCurrentHIPStreamMasqueradingAsCUDA,
+# at::cuda::CUDAGuard -> at::hip::HIPGuardMasqueradingAsCUDA, ...), so TE fails to
+# compile with "'…MasqueradingAsCUDA' is not a member". Restore the 4 compat headers
+# (extracted verbatim from a known-good ROCm torch 2.11 source build that kept them;
+# they only forward to core c10::hip / HIPCachingAllocator types present in our nightly).
+# Drop once ROCm's TransformerEngine targets torch 2.11's renamed hipify mappings.
+# The pip torch 2.11 nightly (dev20260206) is an older/incomplete 2.11 vs the ROCm
+# torch 2.11 source build that vLLM 6e448d0e + ROCm TransformerEngine were validated
+# against. Restore the missing pieces, extracted verbatim from that known-good build:
+#  (1) the 5 c10::hip::*GuardMasqueradingAsCUDA structs, defined in BOTH
+#      ATen/hip/impl/HIPGuardImplMasqueradingAsCUDA.h AND appended to c10/hip/HIPGuard.h,
+#      because TE and aiter include DIFFERENT headers: TE pulls only <c10/hip/HIPGuard.h>
+#      (needs the append), aiter pulls both (would hit "redefinition"). A shared
+#      VIME_HIP_MASQ_GUARDS_DEFINED sentinel in both copies guarantees exactly one
+#      definition regardless of include set (the ATen header #includes HIPGuard.h first,
+#      so the append wins and the ATen block self-skips).
+#  (2) c10/hip/HIPStream.h — c10::hip:: Masquerading stream helpers appended
+#      (ROCm TransformerEngine's hipify still emits these; the nightly stripped them)
+#  (3) torch/csrc/stable/ + headeronly/core/Layout.h — the stable-ABI Tensor gains
+#      layout()/device() + the matching from_blob overload that vLLM's stable-ABI
+#      cuda_view.cu requires (the nightly's stable Tensor lacks them).
+# Drop once the pip rocm7.0 nightly catches up to the source build.
+COPY docker/rocm_torch211_compat/ /tmp/rocm_torch211_compat/
+RUN TINC="$(python3 -c 'import torch,os;print(os.path.dirname(torch.__file__)+"/include")')" && \
+    mkdir -p "$TINC/ATen/hip/impl" && \
+    cp /tmp/rocm_torch211_compat/*.h "$TINC/ATen/hip/impl/" && \
+    HS="$TINC/c10/hip/HIPStream.h" && \
+    if ! grep -q getCurrentHIPStreamMasqueradingAsCUDA "$HS"; then \
+      cat /tmp/rocm_torch211_compat/c10_hipstream_masquerading.inc >> "$HS"; \
+    fi && \
+    HG="$TINC/c10/hip/HIPGuard.h" && \
+    if ! grep -q VIME_HIP_MASQ_GUARDS_DEFINED "$HG"; then \
+      cat /tmp/rocm_torch211_compat/c10_hipguard_masquerading.inc >> "$HG"; \
+    fi && \
+    cp -rf /tmp/rocm_torch211_compat/stable/* "$TINC/torch/csrc/stable/" && \
+    cp -f /tmp/rocm_torch211_compat/headeronly_core/Layout.h "$TINC/torch/headeronly/core/Layout.h" && \
+    echo "restored Masquerading headers + stable-ABI Tensor headers" && \
+    grep -c "Layout layout() const" "$TINC/torch/csrc/stable/tensor_struct.h" && \
+    grep -c "struct HIPGuardMasqueradingAsCUDA" "$HG"
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install --no-deps \
@@ -154,8 +202,23 @@ RUN F=$(find /usr/local/lib/python3.12/dist-packages/ -path "*transformer_engine
 # ======================================== vLLM ================================
 FROM te AS install_vllm
 
-ARG VLLM_TAG="6e448d0ea9bf3d88d898b65449ca6dc2aec170ac"
+# Pin the vLLM commit vime's sync #386 (committed 2026-08-20) was actually authored
+# against. The NV build inherits vLLM from the MOVING vllm/vllm-openai:nightly tag rather
+# than pinning a SHA, so there is no NV commit to copy — only whatever :nightly pointed to
+# on their build day. That tag has since drifted: today it resolves to f25c580af, which is
+# AFTER vLLM PR #53659 (commit 735daf8e, 2026-08-25) moved cli_args.py out of
+# entrypoints/openai/ into entrypoints/launchers/. vime still imports the OLD path
+# (vllm.entrypoints.openai.cli_args in arguments.py + vllm_engine.py), so f25c580af died
+# with "No module named 'vllm.entrypoints.openai.cli_args'".
+# Commit 0a5a5513 (main, 2026-08-20 23:17 — vime #386's authoring day) is verified to have
+# BOTH the new weight-transfer API (NCCLTrainerInitInfo / IPCTrainerInitInfo /
+# WeightTransferTrainerFactory) AND the old openai/cli_args path (FrontendArgs,
+# make_arg_parser, validate_parsed_serve_args) — the self-consistent vLLM vime targets.
+ARG VLLM_TAG="0a5a55136fa0552a19816b211c4a57f1a341d830"
 ARG MAX_JOBS=
+# vLLM's stable-ABI kernels target PyTorch 2.11 (TORCH_TARGET_VERSION=0x020B), satisfied
+# now that the rocm_torch stage installs torch 2.11 — no CMake edit needed (an earlier
+# 0x020A downgrade attempt did not work, since torch 2.10 genuinely lacks Tensor::layout()).
 RUN --mount=type=cache,target=/root/.cache/ccache \
     pip install setuptools_scm && \
     mkdir -p /workspace && cd /workspace && \
@@ -441,6 +504,107 @@ ENV PYTHONPATH=/root/vime:/root/Megatron-LM
 # default path matches this, so the driver and actor agree without a shared-code
 # change. Harmless for every other test/workload (they never read it).
 ENV VIME_FANOUT_TEST_COUNTER_FILE=/tmp/vime_fanout_test_counter.log
+
+# xgrammar: the synced vLLM (6e448d0e) requires xgrammar>=0.2.1 and imports
+# xgrammar.openai_tool_call_schema (added post-0.2.1); the earlier install_vllm stage
+# pins the pre-sync 0.1.32 which lacks that module, so VLLMEngine dies at runtime with
+# "ModuleNotFoundError: No module named 'xgrammar.openai_tool_call_schema'". Upgrade to
+# 0.2.3 here (a LATE layer, after aiter) to keep the heavy install_vllm/aiter build cache
+# valid. 0.2.3 matches the known-good reference build (yangyuhanintel/rocm-verl-dsv4:0817).
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install xgrammar==0.2.3 && \
+    python3 -c "import xgrammar.openai_tool_call_schema; print('xgrammar openai_tool_call_schema ok')"
+
+# torch 2.11 compat: vLLM 6e448d0e calls torch's register_opaque_type(..., hoist=True)
+# (vllm/utils/torch_utils.py). hoist= exists in the torch 2.11 SOURCE build vLLM was
+# validated against (2.11.0+gitd0c8b1f) but NOT in the pip rocm7.0 nightly we install
+# (2.11.0.dev20260206), so `import vllm` dies with
+#   TypeError: register_opaque_type() got an unexpected keyword argument 'hoist'
+# hoist is a torch.compile graph-input optimization (lifts value-type objects in as
+# graph inputs instead of baking them as constants); dropping it does NOT disable
+# compile, it just reverts to the constant-baked path. Append a forwarding wrapper that
+# swallows hoist and forwards the rest, so it's robust to the exact nightly signature.
+# Drop once the pip rocm7.0 nightly gains the hoist= parameter.
+RUN python3 - <<'PY'
+import pathlib
+import torch._library.opaque_object as o
+f = pathlib.Path(o.__file__)
+src = f.read_text()
+if "VIME_HOIST_COMPAT" not in src:
+    src += (
+        "\n\n# VIME_HOIST_COMPAT: tolerate vLLM's hoist= kwarg on older nightlies\n"
+        "_vime_orig_register_opaque_type = register_opaque_type\n"
+        "def register_opaque_type(*args, hoist=False, **kwargs):\n"
+        "    return _vime_orig_register_opaque_type(*args, **kwargs)\n"
+    )
+    f.write_text(src)
+    print("patched register_opaque_type to swallow hoist=")
+else:
+    print("register_opaque_type hoist shim already present")
+# fail loudly if the wrapper is wrong
+import importlib
+importlib.reload(o)
+import inspect
+assert "hoist" in inspect.signature(o.register_opaque_type).parameters, "hoist shim missing"
+print("verified: register_opaque_type accepts hoist")
+PY
+
+# torch 2.11 stable-ABI symbol gap: vLLM's _C_stable_libtorch.abi3.so (compiled against
+# torch's stable c/shim.h) references two flat C dtype getters —
+#   int32_t torch_dtype_float8_e8m0fnu();   // returns ScalarType 44
+#   int32_t torch_dtype_float4_e2m1fn_x2(); // returns ScalarType 45
+# These are DECLARED in torch/csrc/stable/c/shim.h but the pip rocm7.0 nightly
+# (2.11.0.dev20260206) libtorch fails to EXPORT them (the torch 2.11 source build vLLM
+# was validated against does export them). At runtime the .so fails to load with
+#   undefined symbol: torch_dtype_float8_e8m0fnu
+# -> the op get_cuda_view_from_cpu_tensor never registers -> VLLMEngine EngineCore dies
+# with "'_C' object has no attribute 'get_cuda_view_from_cpu_tensor'".
+# Both are trivial constant getters; the ScalarType codes (44 / 45) are identical in our
+# nightly (verified via c10::ScalarType). Compile a tiny shim .so providing them and
+# add it as a NEEDED lib of the vLLM stable .so so the loader resolves them.
+# Drop once the pip rocm7.0 nightly exports these symbols.
+RUN set -e; \
+    printf '%s\n' \
+      'extern "C" int torch_dtype_float8_e8m0fnu() { return 44; }' \
+      'extern "C" int torch_dtype_float4_e2m1fn_x2() { return 45; }' \
+      > /tmp/vime_dtype_shim.cpp && \
+    g++ -shared -fPIC -O2 /tmp/vime_dtype_shim.cpp -o /usr/local/lib/libvime_dtype_shim.so && \
+    SO="$(python3 -c 'import vllm,os;print(os.path.join(os.path.dirname(vllm.__file__),"_C_stable_libtorch.abi3.so"))')" && \
+    patchelf --add-needed libvime_dtype_shim.so "$SO" && \
+    ldconfig && \
+    echo "added libvime_dtype_shim.so as NEEDED to $SO" && \
+    python3 -c "import ctypes, vllm, os; p=os.path.join(os.path.dirname(vllm.__file__),'_C_stable_libtorch.abi3.so'); ctypes.CDLL(p); print('vllm _C_stable_libtorch loads ok')"
+
+# torch 2.11 + vLLM 0.27.1 custom-op aliasing analysis incompatibility.
+# torch 2.11 added _AnalyzeCustomOpInputOutputMode, a TorchDispatchMode that runs on the
+# FIRST invocation of a torch.compile'd graph to check whether a custom op's inputs/outputs
+# alias. When it dispatches vllm.rocm_unquantized_gemm whose weight arg is a vLLM
+# BasevLLMParameter (a Tensor subclass with a custom __torch_function__ at
+# model_executor/parameter.py:126), the subclass + dispatch mode don't compose — every
+# handler returns NotImplemented and the compiled Qwen forward dies during vLLM profile_run:
+#   TypeError: Multiple dispatch failed for 'vllm.rocm_unquantized_gemm.default';
+#   all __torch_dispatch__ handlers returned NotImplemented (_AnalyzeCustomOpInputOutputMode)
+# This is gated by torch._functorch.config.check_custom_op_aliasing (default True). The check
+# is a torch 2.11 VALIDATION pass that, by default (error_on_custom_op_aliasing off), only
+# emits deprecation warnings — disabling it does NOT turn off torch.compile, it skips the
+# aliasing analysis the known-good reference stack (vLLM 0.26.0) never exercised this way.
+# Flip the default to False in the installed torch config so ALL processes (incl. Ray-spawned
+# VLLMEngine workers, which import torch fresh) pick it up. Drop once vLLM/torch fix the
+# BasevLLMParameter x dispatch-mode interaction upstream.
+RUN python3 - <<'PY'
+import pathlib
+import torch._functorch.config as c
+f = pathlib.Path(c.__file__)
+src = f.read_text()
+old = "check_custom_op_aliasing = True"
+new = "check_custom_op_aliasing = False  # VIME: disabled (torch2.11 x vLLM0.27 BasevLLMParameter dispatch-mode incompat)"
+assert old in src, f"expected {old!r} in {f}"
+f.write_text(src.replace(old, new, 1))
+print("patched check_custom_op_aliasing -> False")
+PY
+# Verify in a FRESH interpreter: torch's install_config_module wraps the module so an
+# in-process importlib.reload won't reflect the source edit; a new process does.
+RUN python3 -c "import torch._functorch.config as c; assert c.check_custom_op_aliasing is False, 'config patch did not take'; print('verified: check_custom_op_aliasing is', c.check_custom_op_aliasing)"
 
 RUN python3 -c "\
 import vllm, vime; \
