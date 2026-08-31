@@ -146,7 +146,14 @@ megatron:
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 8 "
         "--colocate "
-        f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
+        # ROCm: --no-offload-rollout disables vLLM sleep mode (offload_rollout=True
+        # otherwise sets enable_sleep_mode=True -> the CuMem allocator). vLLM's ROCm
+        # CuMem port has a wake_up bug (cumem_allocator.cpp: cuMemSetAccess is called
+        # on the full buffer while ROCm maps it in chunks -> "invalid argument"), which
+        # 500s /wake_up?tags=weights and aborts the engine. Keeping rollout resident
+        # avoids the buggy sleep/wake path; the 4B model at --vllm-gpu-memory-utilization
+        # 0.3 leaves enough VRAM to skip offload.
+        f'{"--no-gradient-accumulation-fusion --no-offload-train --no-offload-rollout " if U.is_rocm() else ""}'
     )
 
     train_args = (

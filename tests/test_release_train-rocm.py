@@ -144,7 +144,10 @@ def execute():
             "--actor-num-nodes 1 "
             f"--actor-num-gpus-per-node {NUM_GPUS} "
             "--colocate "
-            f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
+            # ROCm: --no-offload-rollout disables vLLM sleep mode (cumem allocator), whose
+            # ROCm wake_up path is broken (cumem_allocator.cpp cuMemSetAccess over a
+            # chunk-mapped buffer -> "invalid argument", 500s /wake_up?tags=weights).
+            f'{"--no-gradient-accumulation-fusion --no-offload-train --no-offload-rollout " if U.is_rocm() else ""}'
         )
 
         train_args = (

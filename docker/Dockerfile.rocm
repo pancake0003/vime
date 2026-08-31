@@ -613,6 +613,97 @@ PY
 # in-process importlib.reload won't reflect the source edit; a new process does.
 RUN python3 -c "import torch._functorch.config as c; assert c.check_custom_op_aliasing is False, 'config patch did not take'; print('verified: check_custom_op_aliasing is', c.check_custom_op_aliasing)"
 
+# wandb API skew: requirements.txt pins wandb unversioned, so pip installs the latest
+# (0.29.0), which MOVED generate_id from wandb.util to wandb.sdk.lib.runid. vime's
+# wandb_utils.py:46 still calls wandb.util.generate_id() -> AttributeError at train
+# start when --use-wandb is set (all real runs; CI tests skip wandb via unset key).
+# Restore the alias in wandb.util so the old call resolves to the new implementation
+# (verified drop-in: same 8-char id). All other vime wandb usage (init/log/finish/
+# define_metric) is version-stable. Drop once vime updates the import upstream.
+RUN python3 - <<'PY'
+import pathlib, wandb.util
+f = pathlib.Path(wandb.util.__file__)
+src = f.read_text()
+if "VIME_WANDB_GENERATE_ID_COMPAT" not in src:
+    src += (
+        "\n\n# VIME_WANDB_GENERATE_ID_COMPAT: generate_id moved to wandb.sdk.lib.runid in\n"
+        "# wandb 0.29; re-alias it here so wandb.util.generate_id keeps working.\n"
+        "try:\n"
+        "    generate_id\n"
+        "except NameError:\n"
+        "    from wandb.sdk.lib.runid import generate_id\n"
+    )
+    f.write_text(src)
+    print("patched wandb.util.generate_id alias")
+else:
+    print("wandb.util.generate_id alias already present")
+PY
+# Verify in a fresh interpreter that the old call site resolves.
+RUN python3 -c "import wandb.util; assert hasattr(wandb.util, 'generate_id'), 'wandb generate_id shim missing'; print('verified: wandb.util.generate_id ->', wandb.util.generate_id())"
+
+# ROCm PPO-critic offload compat, injected WITHOUT editing vime source.
+# Problem: vime_validate_args() force-enables train offload for the PPO critic
+# (args.offload_train = True when args.use_critic). On ROCm that routes critic weights
+# through torch_memory_saver VMM memory, which hipPointerGetAttribute cannot resolve, so
+# any torch.compile/Triton kernel touching them dies ("Pointer cannot be accessed from
+# Triton"). The clean fix lives in vime/utils/arguments.py, but that file is out of scope
+# for the ROCm CI PR (must stay byte-identical to upstream). We also can't patch the
+# installed file, because tests bind-mount the host vime tree over /root/vime, shadowing it.
+# Instead install a site-packages .pth hook (site-packages is NOT mounted) that wraps
+# vime_validate_args at import time: after the original runs, if we're on ROCm with a critic
+# AND the user explicitly passed --no-offload-train, undo the forced offload and its two
+# downstream cpu-backup flags (defaults are False per docker/patch/latest/megatron.patch).
+# CUDA is untouched (guarded on torch.version.hip). Placed AFTER the hoist/dtype/aliasing/
+# wandb shims because verifying it imports vime -> torch -> vLLM's register_opaque_type,
+# which needs the hoist shim already applied. Drop once arguments.py carries this upstream.
+RUN SP="$(python3 -c 'import site;print(site.getsitepackages()[0])')" && \
+    printf '%s\n' \
+'import sys, importlib.abc, importlib.util' \
+'' \
+'class _VimeOffloadShim(importlib.abc.MetaPathFinder, importlib.abc.Loader):' \
+'    _target = "vime.utils.arguments"' \
+'    _busy = False' \
+'    def find_spec(self, name, path=None, target=None):' \
+'        if name != self._target or self._busy:' \
+'            return None' \
+'        self._busy = True' \
+'        try:' \
+'            spec = importlib.util.find_spec(name)' \
+'        finally:' \
+'            self._busy = False' \
+'        if spec is None or spec.loader is None:' \
+'            return None' \
+'        self._inner = spec.loader' \
+'        spec.loader = self' \
+'        return spec' \
+'    def create_module(self, spec):' \
+'        return None' \
+'    def exec_module(self, module):' \
+'        self._inner.exec_module(module)' \
+'        orig = getattr(module, "vime_validate_args", None)' \
+'        if orig is None:' \
+'            return' \
+'        import torch' \
+'        def wrapped(args, _orig=orig):' \
+'            user_disabled = getattr(args, "offload_train", None) is False' \
+'            _orig(args)' \
+'            if (torch.version.hip is not None and user_disabled' \
+'                    and getattr(args, "use_critic", False)' \
+'                    and getattr(args, "offload_train", False)):' \
+'                args.offload_train = False' \
+'                args.disable_grad_buffers_cpu_backup = False' \
+'                args.disable_param_buffers_cpu_backup = False' \
+'        module.vime_validate_args = wrapped' \
+'' \
+'for _f in list(sys.meta_path):' \
+'    if type(_f).__name__ == "_VimeOffloadShim":' \
+'        break' \
+'else:' \
+'    sys.meta_path.insert(0, _VimeOffloadShim())' \
+        > "$SP/_vime_rocm_offload_shim.py" && \
+    echo "import _vime_rocm_offload_shim" > "$SP/_vime_rocm_offload_shim.pth" && \
+    python3 -c "import vime.utils.arguments as a; assert a.vime_validate_args.__name__=='wrapped', 'shim not active'; print('vime ROCm offload shim active:', a.vime_validate_args.__name__)"
+
 RUN python3 -c "\
 import vllm, vime; \
 from vllm.distributed.weight_transfer.ipc_engine import IPCWeightTransferEngine; \
