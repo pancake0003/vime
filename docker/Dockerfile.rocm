@@ -202,19 +202,16 @@ RUN F=$(find /usr/local/lib/python3.12/dist-packages/ -path "*transformer_engine
 # ======================================== vLLM ================================
 FROM te AS install_vllm
 
-# Pin the vLLM commit vime's sync #386 (committed 2026-08-20) was actually authored
-# against. The NV build inherits vLLM from the MOVING vllm/vllm-openai:nightly tag rather
-# than pinning a SHA, so there is no NV commit to copy — only whatever :nightly pointed to
-# on their build day. That tag has since drifted: today it resolves to f25c580af, which is
-# AFTER vLLM PR #53659 (commit 735daf8e, 2026-08-25) moved cli_args.py out of
-# entrypoints/openai/ into entrypoints/launchers/. vime still imports the OLD path
-# (vllm.entrypoints.openai.cli_args in arguments.py + vllm_engine.py), so f25c580af died
-# with "No module named 'vllm.entrypoints.openai.cli_args'".
-# Commit 0a5a5513 (main, 2026-08-20 23:17 — vime #386's authoring day) is verified to have
-# BOTH the new weight-transfer API (NCCLTrainerInitInfo / IPCTrainerInitInfo /
-# WeightTransferTrainerFactory) AND the old openai/cli_args path (FrontendArgs,
-# make_arg_parser, validate_parsed_serve_args) — the self-consistent vLLM vime targets.
-ARG VLLM_TAG="0a5a55136fa0552a19816b211c4a57f1a341d830"
+# Pin the exact vLLM commit the upstream sync PR validated against. The PR summary records
+# the vLLM nightly as 0.27.2rc1.dev150+g311b3513a -> commit 311b3513a, tested end-to-end on
+# H200 (colocated IPC/fanout, PD/DP, full-disk, PPO regressions). We use that SHA directly
+# rather than the moving vllm/vllm-openai:nightly tag (which drifts): today :nightly
+# resolves to f25c580af, AFTER vLLM PR #53659 (2026-08-25) moved cli_args.py from
+# entrypoints/openai/ to entrypoints/launchers/, which broke vime's OLD-path import
+# (vllm.entrypoints.openai.cli_args). 311b3513a is verified to have BOTH the new
+# weight-transfer API (NCCLTrainerInitInfo / IPCTrainerInitInfo / WeightTransferTrainerFactory)
+# AND the old openai/cli_args path (FrontendArgs, make_arg_parser, validate_parsed_serve_args).
+ARG VLLM_TAG="311b3513af33bc29b4acb2fde2e9313e5e9966a0"
 ARG MAX_JOBS=
 # vLLM's stable-ABI kernels target PyTorch 2.11 (TORCH_TARGET_VERSION=0x020B), satisfied
 # now that the rocm_torch stage installs torch 2.11 — no CMake edit needed (an earlier
@@ -498,6 +495,16 @@ ENV CUDA_DEVICE_MAX_CONNECTIONS=1
 ENV HSA_NO_SCRATCH_RECLAIM=1
 ENV VLLM_ROCM_USE_AITER=1
 ENV PYTHONPATH=/root/vime:/root/Megatron-LM
+# Colocated multi-GPU-per-actor tests (short / fanout_short / opd_vllm, --colocate with
+# actor-num-gpus-per-node 4) crash in MegatronTrainRayActor.init at
+# torch.cuda.set_device(f"cuda:{local_rank}") with "invalid device ordinal": by default
+# Ray sets HIP_VISIBLE_DEVICES per-actor to a single GPU, so each actor sees only 1 device
+# while vime's get_local_gpu_id() (train_actor.py, splits CUDA_VISIBLE_DEVICES) computes a
+# global local_rank (0..3) -> out of range. Tell Ray NOT to set HIP visibility so every
+# actor sees all 8 GPUs and the global ordinal is valid. Pairs with the vLLM
+# _sync_hip_cuda_env_vars no-op patch above (both are needed; async 1-GPU/actor tests pass
+# without it, colocated multi-GPU ones do not). Empirically validated pre-sync.
+ENV RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=1
 # test_qwen2.5_0.5B_fanout_short reads this from os.environ inside the rollout
 # manager Ray actor (via vime/rollout/_fanout_test_helpers.py) to record that the
 # custom-generate path fired. The actor inherits the image env, and the test's
