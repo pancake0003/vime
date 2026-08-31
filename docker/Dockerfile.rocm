@@ -291,6 +291,45 @@ else:
     print("--use-gated-attention registered before --openai-gelu")
 PY
 
+# Accept a normalization= kwarg on get_gpt_layer_with_transformer_engine_spec in the ROCm
+# Megatron fork. vime's model_provider.py (since DSpark #397) passes
+# normalization=args.normalization to BOTH get_gpt_layer_local_spec (fork already accepts it)
+# AND get_gpt_layer_with_transformer_engine_spec (fork's TE variant does NOT -> TypeError:
+# unexpected keyword argument 'normalization', crashing every model build). The kwarg is
+# redundant on this fork: the TE spec applies norm via backend.layer_norm()/TENorm, which
+# reads the type from the transformer config (set from args.normalization elsewhere), not
+# from this parameter. Add it as an accepted-and-ignored param, matching how the fork's own
+# get_gpt_layer_local_spec already declares it. model_provider.py is upstream vime (out of
+# scope to edit); patch the fork instead. Idempotent. Drop once the fork's TE spec gains it.
+RUN python3 - <<'PY'
+import pathlib, sys
+f = pathlib.Path("/root/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py")
+src = f.read_text()
+needle = "def get_gpt_layer_with_transformer_engine_spec("
+i = src.find(needle)
+if i == -1:
+    sys.exit("gpt_layer_specs.py: TE spec function not found; cannot patch normalization")
+# operate only on this function's signature (up to its closing ") -> ModuleSpec:")
+sig_end = src.find(") -> ModuleSpec:", i)
+if sig_end == -1:
+    sys.exit("gpt_layer_specs.py: TE spec signature terminator not found")
+sig = src[i:sig_end]
+if "normalization:" in sig:
+    print("TE spec already accepts normalization=")
+else:
+    anchor = "    moe_use_legacy_grouped_gemm: Optional[bool] = False,\n"
+    if anchor not in sig:
+        sys.exit("gpt_layer_specs.py: moe_use_legacy_grouped_gemm anchor not found in TE spec sig")
+    new_sig = sig.replace(
+        anchor,
+        anchor + "    normalization: Optional[str] = None,  # vime/ROCm: accepted, applied via config\n",
+        1,
+    )
+    src = src[:i] + new_sig + src[sig_end:]
+    f.write_text(src)
+    print("added normalization= to get_gpt_layer_with_transformer_engine_spec")
+PY
+
 # load_common_state_dict uses torch.load(map_location='cpu') with PyTorch's
 # weights_only default, which is True since torch 2.6. The Megatron common.pt
 # carries non-tensor globals (e.g. vllm.config.mamba.MambaBackendEnum via vime's
