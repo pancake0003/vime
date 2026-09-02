@@ -1,4 +1,4 @@
-# vime on AMD ROCm 7.0.2, gfx950 (MI350/MI355X).
+# vime on AMD ROCm 7.2.3, gfx950 (MI350/MI355X).
 #
 # Build:
 #   DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.rocm \
@@ -25,12 +25,13 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTH
     ln -sf /usr/bin/python${PYTHON_VERSION}-config /usr/bin/python3-config && \
     curl -sS https://bootstrap.pypa.io/get-pip.py | python${PYTHON_VERSION}
 
-RUN wget -nv -O /tmp/cmake-3.26.4-linux-x86_64.tar.gz https://cmake.org/files/v3.26/cmake-3.26.4-linux-x86_64.tar.gz && \
-    tar zfx /tmp/cmake-3.26.4-linux-x86_64.tar.gz -C /opt/ && \
-    mv /opt/cmake-3.26.4-linux-x86_64 /opt/cmake-3.26.4 && \
-    rm -f /tmp/cmake-3.26.4-linux-x86_64.tar.gz
+# cmake >= 3.27 required to build torch 2.11 from source (its CMake requires 3.27+).
+RUN wget -nv -O /tmp/cmake-3.31.6-linux-x86_64.tar.gz https://cmake.org/files/v3.31/cmake-3.31.6-linux-x86_64.tar.gz && \
+    tar zfx /tmp/cmake-3.31.6-linux-x86_64.tar.gz -C /opt/ && \
+    mv /opt/cmake-3.31.6-linux-x86_64 /opt/cmake-3.31.6 && \
+    rm -f /tmp/cmake-3.31.6-linux-x86_64.tar.gz
 
-ENV PATH=/opt/cmake-3.26.4/bin:$PATH
+ENV PATH=/opt/cmake-3.31.6/bin:$PATH
 
 ENV CCACHE_DIR=/root/.cache/ccache
 ENV CCACHE_MAXSIZE=50G
@@ -38,18 +39,22 @@ ENV CMAKE_C_COMPILER_LAUNCHER=ccache
 ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache
 ENV CMAKE_HIP_COMPILER_LAUNCHER=ccache
 
-# ======================================== ROCm 7.0.2 ==========================
+# ======================================== ROCm 7.2.3 ==========================
 FROM base AS rocm_deb
 
-ARG ROCM_VERSION=7.0.2
-ARG AMDGPU_VERSION=7.0.2
+ARG ROCM_VERSION=7.2.3
 ARG GFX_ARCH=gfx950
 
+# ROCm 7.2.3 to match the host driver (host runs ROCm 7.2.0) and AMD's validated
+# rocm-verl/verl stack (all 7.2.3). This unblocks a compatible TransformerEngine
+# (7.2.3 publishes the prebuilt TE 2.6.0 wheels; 7.0.2 only had the too-old TE 2.1.0).
+# The amdgpu apt repo is intentionally omitted: the ROCm 'rocm' metapackage on 7.2.3
+# depends only on rocm-repo packages (no amdgpu-dkms), and the host provides the kernel
+# driver, so no separate amdgpu userspace repo is needed (and AMD publishes none for 7.2).
 RUN --mount=target=/var/lib/apt/lists,type=cache,sharing=locked \
     --mount=target=/var/cache/apt,type=cache,sharing=locked \
     curl -sL https://repo.radeon.com/rocm/rocm.gpg.key | apt-key add - \
     && printf "deb [arch=amd64] https://repo.radeon.com/rocm/apt/$ROCM_VERSION/ jammy main\n" | tee /etc/apt/sources.list.d/rocm.list \
-    && printf "deb [arch=amd64] https://repo.radeon.com/amdgpu/$AMDGPU_VERSION/ubuntu jammy main\n" | tee /etc/apt/sources.list.d/amdgpu.list \
     && printf "Package: *\nPin: release o=repo.radeon.com\nPin-Priority: 600\n" | tee /etc/apt/preferences.d/rocm-pin-600 \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y rocm && \
@@ -66,66 +71,64 @@ ENV PATH=/opt/rocm/bin:/opt/rocm/llvm/bin:$PATH
 # ======================================== torch + triton ======================
 FROM rocm_deb AS rocm_torch
 
+# GPU_ARCH is declared before the first FROM; re-declare it here so it's visible in this
+# stage (used as PYTORCH_ROCM_ARCH for the torch-from-source build below).
+ARG GPU_ARCH
+
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip "setuptools<80" wheel numpy einops packaging psutil ninja build pybind11 && \
     pip install /opt/rocm/share/amd_smi
 
-# torch 2.11 (nightly rocm7.0). The synced vime code needs a vLLM new enough to expose
+# torch 2.11 built from source from AMD's ROCm/pytorch fork.
+#
+# WHY FROM SOURCE: the synced vime needs a vLLM new enough to expose
 # WeightTransferTrainerFactory; that vLLM's stable-ABI kernels (csrc/libtorch_stable/
-# cuda_view.cu) use torch::stable::Tensor::layout()/device() + a from_blob overload that
-# only exist in PyTorch 2.11's stable ABI. Stable rocm7.0 tops out at torch 2.10 (whose
-# stable headers lack those methods), so pin the 2.11 nightly wheel. torchaudio dropped
-# (unused by vime/vLLM); torchvision kept for vLLM multimodal.
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip3 install --index-url https://download.pytorch.org/whl/nightly/rocm7.0 \
-      --extra-index-url https://pypi.org/simple \
-      torch==2.11.0.dev20260206+rocm7.0 torchvision==0.26.0.dev20260216+rocm7.0
+# cuda_view.cu) require PyTorch 2.11's stable ABI (Tensor::layout() + a from_blob overload).
+# AMD's public rocm7.0 pip wheels top out at torch 2.10 (no stable layout()), and the pip
+# rocm7.0 *nightly* (2.11.0.dev20260206) is an INCOMPLETE build: its hipify pass didn't
+# generate the c10::hip::*MasqueradingAsCUDA stream/guard headers that ROCm TransformerEngine
+# needs, and it ships an older torch/csrc/stable/ without layout(). A proper source build
+# runs `tools/amd_build/build_amd.py` (hipify), which generates the masquerading headers,
+# and carries the full 2.11 stable ABI — so building from source gives EVERYTHING natively
+# and needs NO vendored/shimmed headers. Recipe mirrors vLLM's docker/Dockerfile.rocm_base
+# (ROCm/pytorch @ d0c8b1f3, the commit AMD's rocm-verl reference image is built from).
+ARG PYTORCH_REPO="https://github.com/ROCm/pytorch.git"
+ARG PYTORCH_BRANCH="d0c8b1f3"
+ARG PYTORCH_VISION_REPO="https://github.com/pytorch/vision.git"
+ARG PYTORCH_VISION_BRANCH="v0.24.1"
+ARG MAX_JOBS=
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    git config --global user.email "build@vime" && git config --global user.name "vime-build" && \
+    git clone ${PYTORCH_REPO} /opt/pytorch && \
+    cd /opt/pytorch && git checkout ${PYTORCH_BRANCH} && \
+    pip install -r requirements.txt && \
+    git submodule update --init --recursive && \
+    python3 tools/amd_build/build_amd.py && \
+    PYTORCH_ROCM_ARCH=${GPU_ARCH} \
+      CMAKE_PREFIX_PATH="$(python3 -c 'import sys; print(sys.prefix)')" \
+      MAX_JOBS=${MAX_JOBS:-$(nproc)} \
+      python3 setup.py bdist_wheel --dist-dir=/opt/torch_dist && \
+    pip install /opt/torch_dist/*.whl && \
+    cd / && rm -rf /opt/pytorch && \
+    python3 -c "import torch; print('built torch', torch.__version__)" && \
+    TINC="$(python3 -c 'import torch,os;print(os.path.dirname(torch.__file__)+"/include")')" && \
+    echo "masq stream helper: $(grep -c getCurrentHIPStreamMasqueradingAsCUDA "$TINC/c10/hip/HIPStream.h")" && \
+    echo "stable layout(): $(grep -c 'layout() const' "$TINC/torch/csrc/stable/tensor_struct.h")"
 
-# torch 2.11 (pip nightly rocm7.0) dropped the ATen/c10 c10::hip::*MasqueradingAsCUDA
-# stream/guard/allocator headers. TransformerEngine's hipify still emits those names
-# (at::cuda::getCurrentCUDAStream -> c10::hip::getCurrentHIPStreamMasqueradingAsCUDA,
-# at::cuda::CUDAGuard -> at::hip::HIPGuardMasqueradingAsCUDA, ...), so TE fails to
-# compile with "'…MasqueradingAsCUDA' is not a member". Restore the 4 compat headers
-# (extracted verbatim from a known-good ROCm torch 2.11 source build that kept them;
-# they only forward to core c10::hip / HIPCachingAllocator types present in our nightly).
-# Drop once ROCm's TransformerEngine targets torch 2.11's renamed hipify mappings.
-# The pip torch 2.11 nightly (dev20260206) is an older/incomplete 2.11 vs the ROCm
-# torch 2.11 source build that vLLM 6e448d0e + ROCm TransformerEngine were validated
-# against. Restore the missing pieces, extracted verbatim from that known-good build:
-#  (1) the 5 c10::hip::*GuardMasqueradingAsCUDA structs, defined in BOTH
-#      ATen/hip/impl/HIPGuardImplMasqueradingAsCUDA.h AND appended to c10/hip/HIPGuard.h,
-#      because TE and aiter include DIFFERENT headers: TE pulls only <c10/hip/HIPGuard.h>
-#      (needs the append), aiter pulls both (would hit "redefinition"). A shared
-#      VIME_HIP_MASQ_GUARDS_DEFINED sentinel in both copies guarantees exactly one
-#      definition regardless of include set (the ATen header #includes HIPGuard.h first,
-#      so the append wins and the ATen block self-skips).
-#  (2) c10/hip/HIPStream.h — c10::hip:: Masquerading stream helpers appended
-#      (ROCm TransformerEngine's hipify still emits these; the nightly stripped them)
-#  (3) torch/csrc/stable/ + headeronly/core/Layout.h — the stable-ABI Tensor gains
-#      layout()/device() + the matching from_blob overload that vLLM's stable-ABI
-#      cuda_view.cu requires (the nightly's stable Tensor lacks them).
-# Drop once the pip rocm7.0 nightly catches up to the source build.
-COPY docker/rocm_torch211_compat/ /tmp/rocm_torch211_compat/
-RUN TINC="$(python3 -c 'import torch,os;print(os.path.dirname(torch.__file__)+"/include")')" && \
-    mkdir -p "$TINC/ATen/hip/impl" && \
-    cp /tmp/rocm_torch211_compat/*.h "$TINC/ATen/hip/impl/" && \
-    HS="$TINC/c10/hip/HIPStream.h" && \
-    if ! grep -q getCurrentHIPStreamMasqueradingAsCUDA "$HS"; then \
-      cat /tmp/rocm_torch211_compat/c10_hipstream_masquerading.inc >> "$HS"; \
-    fi && \
-    HG="$TINC/c10/hip/HIPGuard.h" && \
-    if ! grep -q VIME_HIP_MASQ_GUARDS_DEFINED "$HG"; then \
-      cat /tmp/rocm_torch211_compat/c10_hipguard_masquerading.inc >> "$HG"; \
-    fi && \
-    cp -rf /tmp/rocm_torch211_compat/stable/* "$TINC/torch/csrc/stable/" && \
-    cp -f /tmp/rocm_torch211_compat/headeronly_core/Layout.h "$TINC/torch/headeronly/core/Layout.h" && \
-    echo "restored Masquerading headers + stable-ABI Tensor headers" && \
-    grep -c "Layout layout() const" "$TINC/torch/csrc/stable/tensor_struct.h" && \
-    grep -c "struct HIPGuardMasqueradingAsCUDA" "$HG"
+# torchvision (vLLM multimodal). Built from source against the torch we just compiled.
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    pip install pillow && \
+    git clone ${PYTORCH_VISION_REPO} /opt/vision && \
+    cd /opt/vision && git checkout ${PYTORCH_VISION_BRANCH} && \
+    FORCE_CUDA=1 PYTORCH_ROCM_ARCH=${GPU_ARCH} MAX_JOBS=${MAX_JOBS:-$(nproc)} \
+      python3 setup.py bdist_wheel --dist-dir=/opt/vision_dist && \
+    pip install --no-deps /opt/vision_dist/*.whl && \
+    cd / && rm -rf /opt/vision && \
+    python3 -c "import torchvision; print('built torchvision', torchvision.__version__)"
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install --no-deps \
-    https://repo.radeon.com/rocm/manylinux/rocm-rel-7.0.2/apex-1.9.0a0+rocm7.0.2.git07c3ee53-cp312-cp312-linux_x86_64.whl || \
+    "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.3/apex-1.9.0%2Brocm7.2.3.git355db9b8-cp312-cp312-linux_x86_64.whl" || \
     echo "WARN: apex install skipped/failed (training-only, vime uses --no-gradient-accumulation-fusion)"
 
 ARG TRITON_REPO="https://github.com/ROCm/triton.git"
@@ -181,23 +184,43 @@ ENV NVTE_USE_HIPBLASLT=1
 ENV NVTE_USE_ROCM=1
 ENV NVTE_FRAMEWORK=pytorch
 ENV NVTE_ROCM_ARCH=${GPU_ARCH}
+# TE 2.6.0 CK-attention config, matching AMD's validated verl stack. Without these, TE's
+# dot-product-attention backend selection fails on gfx950 ("No dot product attention
+# backend is available for the provided inputs") during the training forward pass.
+ENV NVTE_USE_CAST_TRANSPOSE_TRITON=0
+ENV NVTE_CK_USES_BWD_V3=1
+ENV NVTE_CK_V3_BF16_CVT=2
 
-ARG TE_TAG="86438dc3d04e7726a2f8f7dc2bcbe74e2bc1f282"
-ARG MAX_JOBS=
-RUN --mount=type=cache,target=/root/.cache/ccache \
+# Install AMD's PREBUILT TransformerEngine wheels instead of compiling TE from source.
+# Building ROCm TransformerEngine from source hipify-generates at::hip::*MasqueradingAsCUDA
+# calls, but torch 2.11 only provides the c10::hip:: variants (no at::hip alias), so the
+# source build fails ("at::hip::HIPGuardMasqueradingAsCUDA is not a member"). AMD's own
+# reference stack (yangyuhan's rocm-verl image) sidesteps this by installing the prebuilt
+# transformer_engine wheels from repo.radeon.com, which are already namespace-consistent.
+# We use the rocm-7.2.3 set (TE 2.6.0), matching this image ROCm version + AMD reference stack.
+ARG TE_ROCM_REL="rocm-rel-7.2.3"
+ARG TE_VERSION="2.6.0"
+RUN --mount=type=cache,target=/root/.cache/pip \
     pip install pybind11 pandas && \
-    git clone --recursive https://github.com/ROCm/TransformerEngine.git /root/TransformerEngine && \
-    cd /root/TransformerEngine && git checkout ${TE_TAG} && \
-    git submodule sync --recursive && git submodule update --init --recursive && \
-    GPU_ARCHS=${GPU_ARCH} MAX_JOBS=${MAX_JOBS:-$(nproc)} NVTE_FUSED_ATTN=0 \
-    pip install . --no-build-isolation -v && \
-    ccache -s && \
-    cd / && rm -rf /root/TransformerEngine
+    pip install --no-build-isolation \
+      "https://repo.radeon.com/rocm/manylinux/${TE_ROCM_REL}/transformer_engine_torch-${TE_VERSION}.tar.gz" && \
+    pip3 install \
+      "https://repo.radeon.com/rocm/manylinux/${TE_ROCM_REL}/transformer_engine-${TE_VERSION}-py3-none-any.whl" \
+      "https://repo.radeon.com/rocm/manylinux/${TE_ROCM_REL}/transformer_engine_rocm-${TE_VERSION}-py3-none-manylinux_2_28_x86_64.whl" && \
+    python3 -c "import importlib.metadata as m; print('installed prebuilt TE', m.version('transformer_engine'))"
 
-RUN F=$(find /usr/local/lib/python3.12/dist-packages/ -path "*transformer_engine*/pytorch/attention/dot_product_attention/utils.py" | head -1) && \
-    if [ -z "$F" ]; then echo "ERROR: TE utils.py not found" && exit 1; fi && \
-    sed -i 's/max_version = PkgVersion("2.8.3")/max_version = PkgVersion("2.8.4")/' "$F" && \
-    grep -n 'max_version = PkgVersion' "$F"
+# Raise TE 2.6.0's flash-attn max-version cap from 2.8.3 to 2.8.4. Our ROCm flash-attention
+# build reports 2.8.4; TE's dot_product_attention/utils.py caps supported flash-attn at
+# <=2.8.3, so it marks FlashAttention=False and, since fused/unfused are also unavailable
+# for the flash backend path, TE selects NoBackend and training dies with
+# "No dot product attention backend is available for the provided inputs". Bumping the cap
+# lets TE use our flash-attn 2.8.4. Version-agnostic (no line pin) + fail-loud.
+RUN F="$(python3 -c 'import transformer_engine,os;print(os.path.dirname(transformer_engine.__file__))')/pytorch/attention/dot_product_attention/utils.py" && \
+    test -f "$F" || { echo "ERROR: TE dpa utils.py not found"; exit 1; } && \
+    grep -q 'PkgVersion("2.8.3")' "$F" && \
+    sed -i 's/PkgVersion("2.8.3")/PkgVersion("2.8.4")/g' "$F" && \
+    echo "patched TE flash-attn max cap -> 2.8.4" && \
+    grep -c 'PkgVersion("2.8.4")' "$F"
 
 # ======================================== vLLM ================================
 FROM te AS install_vllm
@@ -700,16 +723,18 @@ RUN SP="$(python3 -c 'import site;print(site.getsitepackages()[0])')" && \
 'import sys, importlib.abc, importlib.util' \
 '' \
 'class _VimeOffloadShim(importlib.abc.MetaPathFinder, importlib.abc.Loader):' \
-'    _target = "vime.utils.arguments"' \
-'    _busy = False' \
+'    # Wraps two vime modules at import time (source stays byte-identical to upstream;' \
+'    # the host bind-mount over /root/vime would shadow any file patch, so we patch here).' \
+'    _targets = ("vime.utils.arguments", "vime.backends.megatron_utils.model_provider")' \
+'    _busy = set()' \
 '    def find_spec(self, name, path=None, target=None):' \
-'        if name != self._target or self._busy:' \
+'        if name not in self._targets or name in self._busy:' \
 '            return None' \
-'        self._busy = True' \
+'        self._busy.add(name)' \
 '        try:' \
 '            spec = importlib.util.find_spec(name)' \
 '        finally:' \
-'            self._busy = False' \
+'            self._busy.discard(name)' \
 '        if spec is None or spec.loader is None:' \
 '            return None' \
 '        self._inner = spec.loader' \
@@ -719,20 +744,40 @@ RUN SP="$(python3 -c 'import site;print(site.getsitepackages()[0])')" && \
 '        return None' \
 '    def exec_module(self, module):' \
 '        self._inner.exec_module(module)' \
-'        orig = getattr(module, "vime_validate_args", None)' \
-'        if orig is None:' \
-'            return' \
-'        import torch' \
-'        def wrapped(args, _orig=orig):' \
-'            user_disabled = getattr(args, "offload_train", None) is False' \
-'            _orig(args)' \
-'            if (torch.version.hip is not None and user_disabled' \
-'                    and getattr(args, "use_critic", False)' \
-'                    and getattr(args, "offload_train", False)):' \
-'                args.offload_train = False' \
-'                args.disable_grad_buffers_cpu_backup = False' \
-'                args.disable_param_buffers_cpu_backup = False' \
-'        module.vime_validate_args = wrapped' \
+'        name = module.__name__' \
+'        if name == "vime.utils.arguments":' \
+'            orig = getattr(module, "vime_validate_args", None)' \
+'            if orig is None:' \
+'                return' \
+'            import torch' \
+'            def wrapped(args, _orig=orig):' \
+'                # ROCm PPO-critic: honor explicit --no-offload-train (avoid TMS VMM memory' \
+'                # Triton cannot resolve). Also default dspark_enabled for tools that parse' \
+'                # args via Megatron parse_args (e.g. convert_hf_to_torch_dist) and skip' \
+'                # vime_validate_args, where DSpark #397 access would AttributeError.' \
+'                if not hasattr(args, "dspark_enabled"):' \
+'                    args.dspark_enabled = False' \
+'                user_disabled = getattr(args, "offload_train", None) is False' \
+'                _orig(args)' \
+'                if (torch.version.hip is not None and user_disabled' \
+'                        and getattr(args, "use_critic", False)' \
+'                        and getattr(args, "offload_train", False)):' \
+'                    args.offload_train = False' \
+'                    args.disable_grad_buffers_cpu_backup = False' \
+'                    args.disable_param_buffers_cpu_backup = False' \
+'            module.vime_validate_args = wrapped' \
+'        elif name == "vime.backends.megatron_utils.model_provider":' \
+'            # The conversion tool builds the model via Megatron parse_args (no' \
+'            # vime_validate_args), so args.dspark_enabled is unset. model_provider reads it' \
+'            # directly (DSpark #397); wrap the provider factory to default it to False.' \
+'            orig = getattr(module, "get_model_provider_func", None)' \
+'            if orig is None:' \
+'                return' \
+'            def wrapped_factory(args, *a, **k):' \
+'                if not hasattr(args, "dspark_enabled"):' \
+'                    args.dspark_enabled = False' \
+'                return orig(args, *a, **k)' \
+'            module.get_model_provider_func = wrapped_factory' \
 '' \
 'for _f in list(sys.meta_path):' \
 '    if type(_f).__name__ == "_VimeOffloadShim":' \
@@ -741,7 +786,7 @@ RUN SP="$(python3 -c 'import site;print(site.getsitepackages()[0])')" && \
 '    sys.meta_path.insert(0, _VimeOffloadShim())' \
         > "$SP/_vime_rocm_offload_shim.py" && \
     echo "import _vime_rocm_offload_shim" > "$SP/_vime_rocm_offload_shim.pth" && \
-    python3 -c "import vime.utils.arguments as a; assert a.vime_validate_args.__name__=='wrapped', 'shim not active'; print('vime ROCm offload shim active:', a.vime_validate_args.__name__)"
+    python3 -c "import vime.utils.arguments as a; assert a.vime_validate_args.__name__=='wrapped', 'offload shim not active'; print('vime ROCm offload+dspark shim active (arguments wrapped; model_provider wrapped lazily at runtime)')"
 
 RUN python3 -c "\
 import vllm, vime; \
