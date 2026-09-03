@@ -725,7 +725,7 @@ RUN SP="$(python3 -c 'import site;print(site.getsitepackages()[0])')" && \
 'class _VimeOffloadShim(importlib.abc.MetaPathFinder, importlib.abc.Loader):' \
 '    # Wraps two vime modules at import time (source stays byte-identical to upstream;' \
 '    # the host bind-mount over /root/vime would shadow any file patch, so we patch here).' \
-'    _targets = ("vime.utils.arguments", "vime.backends.megatron_utils.model_provider")' \
+'    _targets = ("vime.utils.arguments", "vime.backends.megatron_utils.model_provider", "vime.backends.vllm_utils.vllm_engine")' \
 '    _busy = set()' \
 '    def find_spec(self, name, path=None, target=None):' \
 '        if name not in self._targets or name in self._busy:' \
@@ -778,6 +778,49 @@ RUN SP="$(python3 -c 'import site;print(site.getsitepackages()[0])')" && \
 '                    args.dspark_enabled = False' \
 '                return orig(args, *a, **k)' \
 '            module.get_model_provider_func = wrapped_factory' \
+'        elif name == "vime.backends.vllm_utils.vllm_engine":' \
+'            # ROCm colocate CUDA-IPC weight transfer: the trainer (NOSET_HIP_VISIBLE) exports' \
+'            # its IPC handle from the GPU s ABSOLUTE ordinal, but each vLLM engine subprocess' \
+'            # pins CUDA/HIP_VISIBLE_DEVICES to its single GPU -> that GPU becomes local ordinal' \
+'            # 0, so hipIpcOpenMemHandle rejects the handle ("invalid argument") whenever the' \
+'            # ordinals disagree. Fix: for colocate, pass the GPU via vLLM --device-ids (full' \
+'            # visibility kept, absolute ordinals) and DO NOT pin *_VISIBLE_DEVICES, so engine' \
+'            # and trainer agree. Because engines then run on different absolute ordinals (not' \
+'            # all cuda:0) yet share the local_rank-0 torch.compile/AOT cache path, give each a' \
+'            # private VLLM_CACHE_ROOT keyed by physical GPU so a fault-tolerance-recreated' \
+'            # engine never loads another GPU s baked graph (which would Memory-access-fault).' \
+'            import os as _os' \
+'            _orig_csa = getattr(module, "_compute_server_args", None)' \
+'            _orig_env = getattr(module, "_build_subprocess_env", None)' \
+'            if _orig_csa is not None:' \
+'                def _wrapped_csa(args, rank, *a, base_gpu_id=None, num_gpus_per_engine=None, **k):' \
+'                    kwargs, extra = _orig_csa(args, rank, *a, base_gpu_id=base_gpu_id, num_gpus_per_engine=num_gpus_per_engine, **k)' \
+'                    if getattr(args, "colocate", False) and "device_ids" not in kwargs:' \
+'                        _base = base_gpu_id if base_gpu_id is not None else module.get_base_gpu_id(args, rank)' \
+'                        _gpe = num_gpus_per_engine or args.rollout_num_gpus_per_engine' \
+'                        _ln = min(args.num_gpus_per_node, _gpe)' \
+'                        _vis = _os.environ.get("HIP_VISIBLE_DEVICES") or _os.environ.get("CUDA_VISIBLE_DEVICES")' \
+'                        if _vis:' \
+'                            _vl = [d.strip() for d in _vis.split(",") if d.strip()]' \
+'                            try:' \
+'                                kwargs["device_ids"] = [_vl.index(str(_base + i)) for i in range(_ln)]' \
+'                            except ValueError:' \
+'                                kwargs["device_ids"] = [_base + i for i in range(_ln)]' \
+'                        else:' \
+'                            kwargs["device_ids"] = [_base + i for i in range(_ln)]' \
+'                    return kwargs, extra' \
+'                module._compute_server_args = _wrapped_csa' \
+'            if _orig_env is not None:' \
+'                def _wrapped_env(server_args_dict):' \
+'                    env = _orig_env(server_args_dict)' \
+'                    _dids = server_args_dict.get("device_ids")' \
+'                    if _dids is not None:' \
+'                        env.pop("CUDA_VISIBLE_DEVICES", None)' \
+'                        env.pop("HIP_VISIBLE_DEVICES", None)' \
+'                        _dk = ",".join(str(d) for d in _dids)' \
+'                        env["VLLM_CACHE_ROOT"] = _os.path.join(_os.environ.get("VLLM_CACHE_ROOT", _os.path.expanduser("~/.cache/vllm")), "dev" + _dk)' \
+'                    return env' \
+'                module._build_subprocess_env = _wrapped_env' \
 '' \
 'for _f in list(sys.meta_path):' \
 '    if type(_f).__name__ == "_VimeOffloadShim":' \
