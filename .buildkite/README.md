@@ -77,3 +77,11 @@ Dockerfile or vLLM patch changes.
 
 The test lists live in `pipeline.yml` and `gpu_suites.py`; update both together
 when adding or removing suites.
+
+## ROCm GPU suites (AMD MI300X / MI350X)
+
+AMD GPU tests use a separate pipeline defined in
+[`pipeline-rocm.yaml`](./pipeline-rocm.yaml) (generated from
+[`gen_rocm_pipeline.py`](./gen_rocm_pipeline.py)). Tests run on self-hosted
+agents tagged `queue=amd_gfx950` inside the prebuilt `vllm/vime-rocm:latest`
+image.
