@@ -130,10 +130,6 @@ MISC_ARGS=(
    # Keep train state resident: the colocate offload path leaks VRAM on ROCm gfx950
    # (torch_memory_saver VMM) and Qwen3-8B fits alongside vLLM, so offload is unneeded.
    --no-offload-train
-   # Disable vLLM sleep mode: offload_rollout=True -> enable_sleep_mode=True -> vLLM's
-   # ROCm CuMem allocator, whose wake_up path is broken (cumem_allocator.cpp cuMemSetAccess
-   # over a chunk-mapped buffer -> "invalid argument", 500s /wake_up?tags=weights).
-   --no-offload-rollout
 )
 
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}

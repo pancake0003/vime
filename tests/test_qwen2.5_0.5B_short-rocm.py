@@ -95,7 +95,7 @@ def execute():
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 4 "
         "--colocate "
-        "--no-gradient-accumulation-fusion --no-offload-train --no-offload-rollout "
+        "--no-gradient-accumulation-fusion --no-offload-train "
     )
 
     train_args = (

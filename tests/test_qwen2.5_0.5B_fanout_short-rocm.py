@@ -190,7 +190,7 @@ def execute():
         "--actor-num-gpus-per-node 4 "
         "--colocate "
         f'{"--megatron-to-hf-mode bridge " if not U.is_rocm() else ""}'
-        f'{"--no-gradient-accumulation-fusion --no-offload-train --no-offload-rollout " if U.is_rocm() else ""}'
+        f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
     )
 
     train_args = (
