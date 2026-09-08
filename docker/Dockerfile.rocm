@@ -94,6 +94,10 @@ ENV CUDA_DEVICE_MAX_CONNECTIONS=1
 ENV HSA_NO_SCRATCH_RECLAIM=1
 ENV VLLM_ROCM_USE_AITER=1
 ENV PYTHONPATH=/root/vime:/root/Megatron-LM
+# vime's rollout POSTs to vLLM's /inference/v1/generate (the scale_out
+# token-in-token-out router), which vLLM only mounts when this is set. The base
+# defaults it to None; without it the route 404s and rollout can't reach the engine.
+ENV VLLM_ENABLE_SCALE_OUT_ENDPOINTS=1
 
 # Reset the base ENTRYPOINT (`vllm serve`) so `docker run ... bash -c ...` and
 # `ray job submit` work as a plain bash/ray environment.
