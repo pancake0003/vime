@@ -5,6 +5,12 @@
 # Each test runs in the prebuilt ROCm image and takes the U.is_rocm() path;
 # GPUs are arbitrated with tests/ci/gpu_lock_exec.py on HIP_VISIBLE_DEVICES.
 #
+# RAY_EXPERIMENTAL_NOSET_{HIP,CUDA,ROCR}_VISIBLE_DEVICES=1 are set on every step:
+# gpu_lock_exec pins HIP_VISIBLE_DEVICES to the acquired GPUs, and these stop Ray
+# from rewriting the per-worker visibility var (which on ROCm otherwise collides
+# with the global pin → `invalid device ordinal`, or trips vLLM's HIP/CUDA
+# consistency check). See ROCM_CI_STATUS.md, "Family A".
+#
 # Grading: fully_async gates the build; the gsm8k suites soft_fail (non-blocking)
 # until the vLLM/ROCm NaN-logprob divergence is fixed.
 
@@ -47,6 +53,9 @@ steps:
             --security-opt seccomp=unconfined --ipc=host --shm-size=16g \
             --ulimit memlock=-1 --ulimit stack=67108864 --ulimit nofile=1048576:1048576 \
             -e VIME_AMD_ROCM=1 -e VIME_TEST_DEVICE=rocm -e VIME_SCRIPT_EXTERNAL_RAY=0 \
+            -e RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=1 \
+            -e RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1 \
+            -e RAY_EXPERIMENTAL_NOSET_ROCR_VISIBLE_DEVICES=1 \
             -e HF_HOME=/root/.cache/huggingface \
             -e GITHUB_COMMIT_NAME="$$BUILDKITE_COMMIT" \
             -e TEST_FILE -e NUM_GPUS \
