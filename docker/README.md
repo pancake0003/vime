@@ -50,3 +50,22 @@ carry the vLLM code they are written against:
 
 Both are guarded: the build fails once the base converges, at which point the
 skip is removed rather than kept.
+
+### Runtime env for the ROCm tests
+
+`.buildkite/pipeline-rocm.yaml` sets a few env vars on every step that the tests
+need but the image intentionally does not carry — so a manual `docker run` of
+this image must set them too:
+
+- `RAY_EXPERIMENTAL_NOSET_{HIP,CUDA,ROCR}_VISIBLE_DEVICES=1` — `gpu_lock_exec`
+  pins `HIP_VISIBLE_DEVICES` to the acquired GPUs; these stop Ray from rewriting
+  the per-worker visibility var, which on ROCm otherwise collides with that pin
+  (`invalid device ordinal`) or trips vLLM's HIP/CUDA consistency check.
+- `NCCL_CUMEM_ENABLE=0 NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1` — the train↔engine
+  RCCL weight-transfer group otherwise fails at `ncclCommInitRank` with
+  `unhandled cuda error`.
+
+They live in the pipeline rather than the image `ENV` on purpose: an image-wide
+`ENV` would force the slower NCCL transports on every workload and change Ray's
+device handling for the non-`gpu_lock_exec` path (e.g. `scripts/run-*-amd.sh`),
+neither of which needs these.
