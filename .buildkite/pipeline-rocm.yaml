@@ -5,11 +5,17 @@
 # Each test runs in the prebuilt ROCm image and takes the U.is_rocm() path;
 # GPUs are arbitrated with tests/ci/gpu_lock_exec.py on HIP_VISIBLE_DEVICES.
 #
-# RAY_EXPERIMENTAL_NOSET_{HIP,CUDA,ROCR}_VISIBLE_DEVICES=1 are set on every step:
-# gpu_lock_exec pins HIP_VISIBLE_DEVICES to the acquired GPUs, and these stop Ray
-# from rewriting the per-worker visibility var (which on ROCm otherwise collides
-# with the global pin → `invalid device ordinal`, or trips vLLM's HIP/CUDA
-# consistency check). See ROCM_CI_STATUS.md, "Family A".
+# Every step sets ROCm device/RCCL env on the container:
+#   RAY_EXPERIMENTAL_NOSET_{HIP,CUDA,ROCR}_VISIBLE_DEVICES=1 — gpu_lock_exec pins
+#     HIP_VISIBLE_DEVICES to the acquired GPUs; these stop Ray from rewriting the
+#     per-worker visibility var (which on ROCm otherwise collides with the global
+#     pin → `invalid device ordinal`, or trips vLLM's HIP/CUDA consistency check).
+#   NCCL_CUMEM_ENABLE=0 / NCCL_P2P_DISABLE=1 / NCCL_IB_DISABLE=1 — the RCCL
+#     weight-transfer communicator (train↔vLLM engine) otherwise fails with
+#     `ncclCommInitRank: unhandled cuda error` on this image.
+# The vllm-config/megatron tests use the `-rocm.py` variants, which add the
+# ROCm-only training flags (--no-gradient-accumulation-fusion, lower vLLM
+# mem-util, --update-weight-transport disk for colocate).
 #
 # Grading: fully_async gates the build; the gsm8k suites soft_fail (non-blocking)
 # until the vLLM/ROCm NaN-logprob divergence is fixed.
@@ -56,6 +62,7 @@ steps:
             -e RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=1 \
             -e RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1 \
             -e RAY_EXPERIMENTAL_NOSET_ROCR_VISIBLE_DEVICES=1 \
+            -e NCCL_CUMEM_ENABLE=0 -e NCCL_P2P_DISABLE=1 -e NCCL_IB_DISABLE=1 \
             -e HF_HOME=/root/.cache/huggingface \
             -e GITHUB_COMMIT_NAME="$$BUILDKITE_COMMIT" \
             -e TEST_FILE -e NUM_GPUS \
@@ -101,4 +108,82 @@ steps:
         env:
           TEST_FILE: "test_qwen3.5_0.8B_gsm8k_async_short.py"
           NUM_GPUS: "4"
+        command: *rocm_gpu_test
+
+      # vllm-config + quick-start suites — green on ROCm via the -rocm.py variants
+      # (which carry --no-gradient-accumulation-fusion, vLLM mem-util 0.3, and
+      # --update-weight-transport disk for the colocate cases). See ROCM_CI_STATUS.md.
+      - label: ":fire: vllm-config · distributed 0.5B (8 GPU)"
+        key: rocm-vllm-config-distributed
+        agents:
+          queue: amd_mi355_vime_rl
+        timeout_in_minutes: 360
+        soft_fail: false
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 2
+        env:
+          TEST_FILE: "test_qwen2.5_0.5B_vllm_config_distributed-rocm.py"
+          NUM_GPUS: "8"
+        command: *rocm_gpu_test
+
+      - label: ":fire: vllm-config · single 0.5B (8 GPU)"
+        key: rocm-vllm-config
+        agents:
+          queue: amd_mi355_vime_rl
+        timeout_in_minutes: 360
+        soft_fail: false
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 2
+        env:
+          TEST_FILE: "test_qwen2.5_0.5B_vllm_config-rocm.py"
+          NUM_GPUS: "8"
+        command: *rocm_gpu_test
+
+      - label: ":fire: vllm-config · mixed_offload 0.5B (8 GPU)"
+        key: rocm-vllm-config-mixed-offload
+        agents:
+          queue: amd_mi355_vime_rl
+        timeout_in_minutes: 360
+        soft_fail: false
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 2
+        env:
+          TEST_FILE: "test_vllm_config_mixed_offload-rocm.py"
+          NUM_GPUS: "8"
+        command: *rocm_gpu_test
+
+      - label: ":fire: vllm-config · mixed_offload_ft 0.5B (8 GPU)"
+        key: rocm-vllm-config-mixed-offload-ft
+        agents:
+          queue: amd_mi355_vime_rl
+        timeout_in_minutes: 360
+        soft_fail: false
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 2
+        env:
+          TEST_FILE: "test_vllm_config_mixed_offload_ft-rocm.py"
+          NUM_GPUS: "8"
+        command: *rocm_gpu_test
+
+      - label: ":fire: quick-start · glm4 9B (8 GPU)"
+        key: rocm-quick-start-glm4-9b
+        agents:
+          queue: amd_mi355_vime_rl
+        timeout_in_minutes: 360
+        soft_fail: false
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 2
+        env:
+          TEST_FILE: "test_quick_start_glm4_9B-rocm.py"
+          NUM_GPUS: "8"
         command: *rocm_gpu_test
