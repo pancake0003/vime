@@ -132,8 +132,11 @@ COPY docker/patch/${PATCH_VERSION}/vllm-inflight-queue-diagnostics.patch /tmp/vl
 # paired with a check that fails the build once the base converges, so none of
 # them can quietly outlive the drift that motivated it:
 #
-#   * `patch --fuzz=3` throughout. Context drifts by tens of lines on this base;
-#     the .rej sweep is what keeps that tolerance honest.
+#   * `patch --fuzz=0` throughout. Line numbers drift by tens of lines on this
+#     base (patch still absorbs that offset), but fuzz=0 forbids ignoring context
+#     lines, so an addition-only hunk cannot fuzz-match at a wrong location. The
+#     .rej sweep catches outright failures; the per-patch import assertions below
+#     confirm each patch's API actually landed (not just that no .rej appeared).
 #   * The Qwen3-Omni audio-encoder hunk is already upstream here, in a better
 #     form (TP sharding when the head count divides, disable_tp otherwise), so
 #     that file is dropped. The grep fails the build if a base stops carrying it.
@@ -163,9 +166,9 @@ RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirn
       /tmp/vllm.patch > /tmp/vllm-rocm.patch && \
     awk '/^diff --git /{keep = ($0 !~ / b\/tests\//)} keep' \
       /tmp/vllm-inflight.patch > /tmp/vllm-inflight-rocm.patch && \
-    patch -p1 --forward --fuzz=3 --no-backup-if-mismatch < /tmp/vllm-pull_weights.patch && \
-    patch -p1 --forward --fuzz=3 --no-backup-if-mismatch < /tmp/vllm-rocm.patch && \
-    patch -p1 --forward --fuzz=3 --no-backup-if-mismatch < /tmp/vllm-inflight-rocm.patch && \
+    patch -p1 --forward --fuzz=0 --no-backup-if-mismatch < /tmp/vllm-pull_weights.patch && \
+    patch -p1 --forward --fuzz=0 --no-backup-if-mismatch < /tmp/vllm-rocm.patch && \
+    patch -p1 --forward --fuzz=0 --no-backup-if-mismatch < /tmp/vllm-inflight-rocm.patch && \
     if find . -name '*.rej' | grep -q .; then \
       echo "A vLLM patch did not apply cleanly — rebase docker/patch/${PATCH_VERSION}/." && \
       exit 1; \
@@ -204,13 +207,21 @@ ENV PYTHONPATH=/root/vime:/root/Megatron-LM
 # `docker build` has no GPU, so this covers everything importable without one.
 # megatron.training (via apex -> aiter) and the Megatron train actor are covered
 # by the ROCm Buildkite suites, which run this image on real MI355X GPUs.
+# The three asserts below each pin one of the applied vLLM patches to a symbol it
+# adds, so a misplaced (but non-rejecting) hunk still fails the build:
+#   weight_version field        <- vllm-rocm.patch
+#   local_checkpoint.pull_checkpoint  <- vllm-pull_weights.patch
+#   get_inflight_queue_diagnostics    <- vllm-inflight-rocm.patch
 RUN python3 -c "\
 import torch, vllm, vime, transformer_engine, megatron.core; \
 import fake_int4_quant_cuda; \
 from vllm.distributed.weight_transfer.ipc_engine import IPCWeightTransferEngine; \
 from vllm.entrypoints.scale_out.token_in_token_out.protocol import GenerateResponse; \
+from vllm.utils.local_checkpoint import pull_checkpoint; \
+from vllm.v1.core.sched.scheduler import Scheduler; \
 from vime.backends.vllm_utils.vllm_engine import VLLMEngine; \
-assert 'weight_version' in GenerateResponse.model_fields, 'vllm.patch did not apply'; \
+assert 'weight_version' in GenerateResponse.model_fields, 'vllm-rocm.patch did not apply'; \
+assert hasattr(Scheduler, 'get_inflight_queue_diagnostics'), 'vllm-inflight-rocm.patch did not apply'; \
 print('torch', torch.__version__, 'hip', torch.version.hip); \
 print('vllm', vllm.__version__); \
 print('transformer_engine', transformer_engine.__version__); \
@@ -219,6 +230,10 @@ print('vime import ok')"
 # Reset ENTRYPOINT inherited from the vllm/vllm-openai-rocm base (`vllm serve`),
 # so the image is a plain bash/ray environment. Without this, `docker run ... bash -c ...`
 # and `ray job submit` append to `vllm serve` and break.
+# Default to `sleep infinity` (not bash) so a detached `docker run -d` with no command
+# stays alive for the documented `docker exec` quick start (docs/en/platform_support/
+# amd_tutorial.md); bash would read EOF with no TTY and exit, stopping the container.
+# CI's explicit `--entrypoint bash ... -lc` still overrides this.
 WORKDIR /root/vime
 ENTRYPOINT []
-CMD ["/bin/bash"]
+CMD ["sleep", "infinity"]
