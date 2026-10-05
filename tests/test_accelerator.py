@@ -141,6 +141,19 @@ def test_cuda_visible_device_mapping(monkeypatch):
 
 
 @pytest.mark.unit
+def test_non_contiguous_allocation_maps_to_local_ordinal(monkeypatch):
+    # Reviewer's scenario: a 4-GPU job holding 4,5,6,7 must map physical 6 -> local 2,
+    # not the raw physical id. gpu_lock_exec now keeps CUDA_VISIBLE_DEVICES in agreement
+    # with the acquired HIP set so this resolves correctly on ROCm.
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,5,6,7")
+    accelerator.set_accelerator(FakeAccelerator())
+
+    assert accelerator.resolve_visible_device_id(4) == 0
+    assert accelerator.resolve_visible_device_id(6) == 2
+    assert accelerator.resolve_visible_device_id(7) == 3
+
+
+@pytest.mark.unit
 def test_registered_backend_can_be_selected(monkeypatch):
     class RegisteredAccelerator(FakeAccelerator):
         name = "registered"

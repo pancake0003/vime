@@ -25,6 +25,12 @@ def main():
 
     dev_list = ",".join(str(x.gpu_id) for x in fd_locks)
     os.environ[args.target_env_name] = dev_list
+    # Keep CUDA visibility in agreement with the acquired set. On ROCm the pipeline pins
+    # HIP_VISIBLE_DEVICES, but vime's device resolver (Accelerator.resolve_visible_device_id)
+    # reads CUDA_VISIBLE_DEVICES; without this a non-contiguous allocation (e.g. 4,5,6,7)
+    # resolves to the wrong local ordinal. No-op on the CUDA path (target is already CUDA_*).
+    if args.target_env_name != "CUDA_VISIBLE_DEVICES":
+        os.environ["CUDA_VISIBLE_DEVICES"] = dev_list
     print(f"[gpu_lock_exec] Acquired GPUs: {dev_list}", flush=True)
 
     try:
