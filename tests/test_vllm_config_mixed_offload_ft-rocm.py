@@ -6,7 +6,8 @@ on the updatable (actor) server, testing:
   - Health monitor detects crash and marks engine as None
   - RolloutServer.recover() restarts the dead engine
   - Updatable engines: offload → resume_memory_occupation → update_weights
-  - Non-updatable engines: offload → update_weights_from_disk
+  - Non-updatable engines: offload (level-1 sleep) → resume_memory_occupation
+    (memory restore; no disk round-trip — disk transport is actor-only)
   - Training continues after recovery
 """
 
@@ -151,7 +152,6 @@ def execute():
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 8 "
         "--colocate "
-        f'{"--megatron-to-hf-mode bridge " if not U.is_rocm() else ""}'
         f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
         f'{"--update-weight-transport disk --update-weight-disk-dir /tmp/vime_wsync_mixed_offload_ft " if U.is_rocm() else ""}'
     )

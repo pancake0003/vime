@@ -128,11 +128,13 @@ megatron:
 
     ci_args = "--ci-test "
 
-    # Colocated CUDA-IPC weight transfer (UpdateWeightFromTensor) on both CUDA and
-    # ROCm. On ROCm, --no-offload-train (honored for the critic via arguments.py)
-    # keeps the trainer's weights in plain hipMalloc memory that hipIpcOpenMemHandle
-    # can map and that Triton can resolve, so no disk-transport fallback is needed.
-    weight_transport_args = ""
+    # EXPERIMENTAL / not wired into CI: the ROCm train-actor segfaults on the
+    # PPO/critic path (under investigation), so this variant has no pipeline step.
+    # Intent is colocated CUDA-IPC weight transfer (UpdateWeightFromTensor) with
+    # --no-offload-train keeping the trainer's weights in plain hipMalloc memory
+    # that hipIpcOpenMemHandle can map. CAVEAT: --no-offload-train is NOT currently
+    # honored for the critic — arguments.py force-enables offload_train whenever
+    # use_critic is set (PPO), so this path is not actually exercised yet.
 
     misc_args = (
         # default dropout in megatron is 0.1
@@ -160,7 +162,6 @@ megatron:
         f"{eval_args} "
         f"{vllm_args} "
         f"{ci_args} "
-        f"{weight_transport_args} "
         f"{misc_args} "
     )
 

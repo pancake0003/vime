@@ -123,6 +123,7 @@ megatron:
         "--rollout-num-gpus 8 "
         f"--vllm-gpu-memory-utilization {'0.3' if U.is_rocm() else '0.8'} "
         "--vllm-max-num-seqs 512 "
+        f"{'' if U.is_rocm() else '--vllm-max-cudagraph-capture-size 16 '}"
     )
 
     ci_args = "--ci-test "
@@ -139,6 +140,9 @@ megatron:
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 8 "
         "--colocate "
+        # EXPERIMENTAL / unwired: ROCm PPO-critic path segfaults (under investigation).
+        # --no-offload-train is currently a no-op for the critic — arguments.py
+        # force-enables offload_train when use_critic is set.
         f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
     )
 

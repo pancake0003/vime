@@ -122,7 +122,7 @@ def execute():
         "--rollout-num-gpus-per-engine 1 "
         f"--vllm-gpu-memory-utilization {'0.3' if U.is_rocm() else '0.7'} "
         "--vllm-max-num-seqs 32 "
-        f"{'' if U.is_rocm() else '--vllm-max-cudagraph-capture-size 16 '}"
+        f"{'' if U.is_rocm() else '--vllm-max-cudagraph-capture-size 32 '}"
         f"--vllm-config {config_path} "
     )
 
@@ -137,7 +137,6 @@ def execute():
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 8 "
         "--colocate "
-        f'{"--megatron-to-hf-mode bridge " if not U.is_rocm() else ""}'
         f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
         f'{"--update-weight-transport disk --update-weight-disk-dir /tmp/vime_wsync_vllm_config " if U.is_rocm() else ""}'
     )

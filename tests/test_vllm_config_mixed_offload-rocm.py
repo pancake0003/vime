@@ -4,11 +4,13 @@ Deploys two models via --vllm-config in colocate mode:
   - "actor": update_weights=true, 4 GPUs → overlaps with megatron, gets offloaded
     and weights updated from training.
   - "ref":   update_weights=false, 4 GPUs → overlaps with megatron, gets offloaded
-    and weights restored from disk (update_weights_from_disk).
+    via level-1 sleep (weights kept in CPU RAM) and restored by memory wake_up.
+    NOT a disk round-trip: update_weights_from_disk only runs for the updatable
+    actor; frozen engines never take the disk path.
 
 Key coverage:
   - Per-group needs_offload (both overlap with megatron in colocate mode)
-  - update_weights_from_disk for frozen model
+  - Frozen model offload/restore via level-1 sleep + memory resume
   - Selective flush_cache (only for offloaded / updatable engines)
   - Offload/onload cycle completes without crash
 """
@@ -147,7 +149,6 @@ def execute():
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 8 "
         "--colocate "
-        f'{"--megatron-to-hf-mode bridge " if not U.is_rocm() else ""}'
         f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
         f'{"--update-weight-transport disk --update-weight-disk-dir /tmp/vime_wsync_mixed_offload " if U.is_rocm() else ""}'
     )

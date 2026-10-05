@@ -143,6 +143,9 @@ megatron:
         "--attention-backend flash "
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 4 "
+        # EXPERIMENTAL / unwired: ROCm PPO-critic path segfaults (under investigation).
+        # --no-offload-train is currently a no-op for the critic — arguments.py
+        # force-enables offload_train when use_critic is set.
         f'{"--no-gradient-accumulation-fusion --no-offload-train " if U.is_rocm() else ""}'
     )
 
