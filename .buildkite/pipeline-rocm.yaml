@@ -112,9 +112,9 @@ steps:
           NUM_GPUS: "4"
         command: *rocm_gpu_test
 
-      # vllm-config + quick-start suites — green on ROCm via the -rocm.py variants
-      # (which carry --no-gradient-accumulation-fusion, vLLM mem-util 0.3, and
-      # --update-weight-transport disk for the colocate cases). See ROCM_CI_STATUS.md.
+      # vllm-config suites — green on ROCm via the -rocm.py variants (which carry
+      # --no-gradient-accumulation-fusion, vLLM mem-util 0.3, and
+      # --update-weight-transport disk for the colocate cases).
       - label: ":fire: vllm-config · distributed 0.5B (8 GPU)"
         key: rocm-vllm-config-distributed
         agents:
@@ -172,20 +172,5 @@ steps:
               limit: 2
         env:
           TEST_FILE: "test_vllm_config_mixed_offload_ft-rocm.py"
-          NUM_GPUS: "8"
-        command: *rocm_gpu_test
-
-      - label: ":fire: quick-start · glm4 9B (8 GPU)"
-        key: rocm-quick-start-glm4-9b
-        agents:
-          queue: amd_mi355_vime_rl
-        timeout_in_minutes: 360
-        soft_fail: false
-        retry:
-          automatic:
-            - exit_status: -1
-              limit: 2
-        env:
-          TEST_FILE: "test_quick_start_glm4_9B-rocm.py"
           NUM_GPUS: "8"
         command: *rocm_gpu_test

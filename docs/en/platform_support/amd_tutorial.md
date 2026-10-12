@@ -12,12 +12,11 @@ Execute the following commands to pull the latest ROCm image and start a persist
 # Pull the ROCm image
 docker pull vllm/vime-rocm
 
-# Start the container. Pass `sleep infinity` so the detached container stays up for
-# `docker exec` — the default CMD (/bin/bash) would read EOF with no TTY and exit.
+# Start the container
 docker run -d --name vime --ulimit nofile=1048576:1048576 \
   --ipc=host --network=host --device=/dev/kfd --device=/dev/dri \
   --security-opt seccomp=unconfined --group-add video --privileged \
-  -e WANDB_API_KEY=$wandb_key vllm/vime-rocm sleep infinity
+  -e WANDB_API_KEY=$wandb_key vllm/vime-rocm
 # wandb key is optional if you want to track with WandB
 
 # Enter the container
