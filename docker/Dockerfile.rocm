@@ -1,7 +1,5 @@
-# vime on AMD ROCm. The base ships the inference half (ROCm, torch, triton,
-# aiter, flash-attn, vLLM); this adds the training half. Defaults to gfx950.
-#
-#   DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.rocm -t vllm/vime-rocm:latest .
+# vime on AMD ROCm (gfx950): base ships inference (ROCm/torch/triton/aiter/fa/vLLM), this adds training.
+# Build: DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.rocm -t vllm/vime-rocm:latest .
 
 ARG BASE_IMAGE=vllm/vllm-openai-rocm:nightly
 FROM ${BASE_IMAGE}
@@ -92,27 +90,23 @@ RUN pip install "git+https://github.com/fzyzcjy/torch_memory_saver.git@${TMS_COM
 COPY requirements.txt /tmp/vime-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/vime-requirements.txt
 
-# megatron_utils.initialize asserts numpy 1.x, so numpy and SciPy pin back.
-# Costs the base's cupy (numpy 2 ABI), which nothing here imports.
-# pyarrow too: the base's 26.0.0 is built against numpy 2.0 and refuses numpy 1.x
-# at import (breaks Ray serialization and HF datasets). 25.0.1 is the newest PyPI
-# wheel that imports under numpy 1.26.4 while still satisfying datasets>=24.
+# Megatron asserts numpy 1.x; pin numpy/scipy/pyarrow back. pyarrow 25.0.1 is the newest
+# that imports under numpy 1.26.4 (base's 26.0.0 is numpy-2-only) and still satisfies datasets>=24.
 RUN pip install --no-cache-dir "numpy==1.26.4" "scipy==1.17.1" "pyarrow==25.0.1"
 
 
 # ====================================== Patches ============================================
 
-# vLLM is a pip install, not a git checkout, so `patch` rather than `git apply`.
-# Pull-weights first: the general patch builds on its line layout.
-COPY docker/patch/${PATCH_VERSION}/vllm-pull_weights.patch /tmp/vllm-pull_weights.patch
-COPY docker/patch/${PATCH_VERSION}/vllm.patch /tmp/vllm.patch
-COPY docker/patch/${PATCH_VERSION}/vllm-inflight-queue-diagnostics.patch /tmp/vllm-inflight.patch
-# Adds the /health_generate route the rollout health monitor polls. Applied after
-# the inflight patch: check_health_generate() calls get_inflight_queue_diagnostics().
+# vLLM is a pip install, so `patch` not `git apply`. These 3 are ROCm-rebased for the
+# nightly base (docker/amd_patch/); the shared docker/patch/ copies are CUDA-only.
+COPY docker/amd_patch/${PATCH_VERSION}/vllm-pull_weights.patch /tmp/vllm-pull_weights.patch
+COPY docker/amd_patch/${PATCH_VERSION}/vllm.patch /tmp/vllm.patch
+COPY docker/amd_patch/${PATCH_VERSION}/vllm-inflight-queue-diagnostics.patch /tmp/vllm-inflight.patch
+# Adds the /health_generate route the rollout health monitor polls. Shared with CUDA
+# (docker/patch/); applied after inflight since check_health_generate() calls its diagnostics.
 COPY docker/patch/${PATCH_VERSION}/vllm-generation-health.patch /tmp/vllm-generation-health.patch
-# This base carries the Qwen3-Omni and PD-metrics changes already, and lacks
-# SamplingMaskLists.merge, so those hunks are dropped; the guards below fail the
-# build once that stops being true. tests/ hunks have no target here.
+# Base already carries Qwen3-Omni/PD-metrics and lacks SamplingMaskLists.merge, so those
+# hunks (and tests/ hunks) are dropped; the guards below fail the build once that changes.
 RUN VLLM_SITE="$(python3 -c 'import os, vllm; print(os.path.dirname(os.path.dirname(vllm.__file__)))')" && \
     cd "$VLLM_SITE" && \
     grep -q 'disable_tp' vllm/model_executor/models/qwen3_omni_moe_thinker.py && \
@@ -170,9 +164,8 @@ ENV VLLM_ROCM_USE_AITER=1
 ENV MIOPEN_DEBUG_CONV_DIRECT=0
 ENV PYTHONPATH=/root/vime:/root/Megatron-LM
 
-# `docker build` has no GPU, so this covers everything importable without one.
-# megatron.training (via apex -> aiter) and the Megatron train actor are covered
-# by the ROCm Buildkite suites, which run this image on real MI355X GPUs.
+# docker build has no GPU, so this covers CPU-importable only; megatron.training and the
+# train actor are covered by the ROCm Buildkite suites running this image on real MI355X.
 RUN python3 -c "\
 import torch, vllm, vime, transformer_engine, megatron.core; \
 import fake_int4_quant_cuda; \
@@ -185,12 +178,10 @@ print('vllm', vllm.__version__); \
 print('transformer_engine', transformer_engine.__version__); \
 print('vime import ok')"
 
-# Reset ENTRYPOINT inherited from the vllm/vllm-openai-rocm base (`vllm serve`),
-# so the image is a plain bash/ray environment. Without this, `docker run ... bash -c ...`
-# and `ray job submit` append to `vllm serve` and break.
+# Reset the base's `vllm serve` ENTRYPOINT to a plain bash/ray env; else
+# `docker run ... bash -c` and `ray job submit` append to `vllm serve` and break.
 WORKDIR /root/vime
 ENTRYPOINT []
-# sleep infinity (not /bin/bash): `docker run -d <img>` has no TTY, so bash reads
-# EOF and exits immediately, killing the detached container. CI overrides with
-# --entrypoint bash, so this only affects the documented detached workflow.
+# sleep infinity (not /bin/bash): `docker run -d` has no TTY so bash exits on EOF,
+# killing the detached container. CI overrides this with --entrypoint bash.
 CMD ["sleep", "infinity"]

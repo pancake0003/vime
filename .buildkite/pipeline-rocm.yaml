@@ -1,24 +1,5 @@
-# Buildkite CI for vime — AMD ROCm GPU suites. See .buildkite/README.md.
-#
-# One step per test on the self-hosted gfx950 (MI355X) queue
-# (queue=amd_mi355_vime_rl, docker access + ROCm devices /dev/kfd, /dev/dri).
-# Each test runs in the prebuilt ROCm image and takes the U.is_rocm() path;
-# GPUs are arbitrated with tests/ci/gpu_lock_exec.py on HIP_VISIBLE_DEVICES.
-#
-# Every step sets ROCm device/RCCL env on the container:
-#   RAY_EXPERIMENTAL_NOSET_{HIP,CUDA,ROCR}_VISIBLE_DEVICES=1 — gpu_lock_exec pins
-#     HIP_VISIBLE_DEVICES to the acquired GPUs; these stop Ray from rewriting the
-#     per-worker visibility var (which on ROCm otherwise collides with the global
-#     pin → `invalid device ordinal`, or trips vLLM's HIP/CUDA consistency check).
-#   NCCL_CUMEM_ENABLE=0 / NCCL_P2P_DISABLE=1 / NCCL_IB_DISABLE=1 — the RCCL
-#     weight-transfer communicator (train↔vLLM engine) otherwise fails with
-#     `ncclCommInitRank: unhandled cuda error` on this image.
-# The vllm-config/megatron tests use the `-rocm.py` variants, which add the
-# ROCm-only training flags (--no-gradient-accumulation-fusion, lower vLLM
-# mem-util, --update-weight-transport disk for colocate).
-#
-# Grading: fully_async gates the build; the gsm8k suites soft_fail (non-blocking)
-# until the vLLM/ROCm NaN-logprob divergence is fixed.
+# Buildkite CI for vime — AMD ROCm GPU suites on the self-hosted gfx950 (MI355X) queue (amd_mi355_vime_rl),
+# running the prebuilt ROCm image. Steps set NOSET_*/NCCL_* ROCm env; fully_async gates, gsm8k soft_fails (NaN-logprob).
 
 env:
   # Prebuilt ROCm image (built from docker/Dockerfile.rocm). Override per-agent
@@ -48,11 +29,8 @@ steps:
         env:
           TEST_FILE: "test_qwen2.5_0.5B_fully_async_short.py"
           NUM_GPUS: "4"
-        # $$VAR / $$PWD are escaped so the buildkite-agent expands them at run
-        # time (from the step env / checkout) instead of Buildkite interpolating
-        # them to empty at pipeline-upload time. The inner `bash -lc` script is
-        # single-quoted, so $TEST_FILE / $NUM_GPUS are expanded by the container
-        # shell from the forwarded (-e) env, not the host.
+        # $$VAR escaped so buildkite-agent expands at run time (not emptied at pipeline-upload);
+        # inner `bash -lc` is single-quoted so $TEST_FILE/$NUM_GPUS come from the forwarded -e env.
         command: &rocm_gpu_test |
           docker run --rm \
             --device=/dev/kfd --device=/dev/dri --group-add video --privileged \
@@ -78,10 +56,8 @@ steps:
                 -- bash -c '\''export CUDA_VISIBLE_DEVICES="$$HIP_VISIBLE_DEVICES"; exec python "tests/$$TEST_FILE"'\''
             '
 
-      # gsm8k suites run on ROCm but aren't green yet: vLLM rollout returns NaN
-      # logprobs for Qwen3.5-0.8B on ROCm, so the train-vs-rollout logprob check
-      # diverges. Kept visible (orange) and non-blocking until fixed; drop
-      # soft_fail once each passes on the U.is_rocm() path.
+      # gsm8k not green: vLLM returns NaN rollout logprobs for Qwen3.5-0.8B on ROCm, diverging
+      # the train-vs-rollout check. soft_fail (non-blocking) until it passes on the U.is_rocm() path.
       - label: ":warning: short · gsm8k 0.8B (4 GPU) [soft-fail]"
         key: rocm-gsm8k-short
         agents:
@@ -112,9 +88,8 @@ steps:
           NUM_GPUS: "4"
         command: *rocm_gpu_test
 
-      # vllm-config suites — green on ROCm via the -rocm.py variants (which carry
-      # --no-gradient-accumulation-fusion, vLLM mem-util 0.3, and
-      # --update-weight-transport disk for the colocate cases).
+      # vllm-config suites — green on ROCm via the -rocm.py variants (--no-gradient-accumulation-fusion,
+      # vLLM mem-util 0.3, --update-weight-transport disk for the colocate cases).
       - label: ":fire: vllm-config · distributed 0.5B (8 GPU)"
         key: rocm-vllm-config-distributed
         agents:
