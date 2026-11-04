@@ -1,7 +1,8 @@
 diff --git a/vllm/entrypoints/scale_out/token_in_token_out/protocol.py b/vllm/entrypoints/scale_out/token_in_token_out/protocol.py
+index cfa737a..dfb6648 100644
 --- a/vllm/entrypoints/scale_out/token_in_token_out/protocol.py
 +++ b/vllm/entrypoints/scale_out/token_in_token_out/protocol.py
-@@ -416,6 +416,8 @@
+@@ -584,6 +584,8 @@ class GenerateStreamResponseBase(BaseModel):
      prompt_token_ids: list[NonNegativeInt] | None = None
      mm_placeholders: dict[str, list[PlaceholderRangeInfo]] | None = None
      metrics: PerRequestMetrics | None = None
@@ -10,7 +11,7 @@ diff --git a/vllm/entrypoints/scale_out/token_in_token_out/protocol.py b/vllm/en
  
  
  class GenerateTokensStreamResponse(GenerateStreamResponseBase):
-@@ -445,6 +447,8 @@
+@@ -627,6 +629,8 @@ class GenerateResponseBase(BaseModel):
      prompt_token_ids: list[NonNegativeInt] | None = None
      mm_placeholders: dict[str, list[PlaceholderRangeInfo]] | None = None
      metrics: PerRequestMetrics | None = None
@@ -20,9 +21,10 @@ diff --git a/vllm/entrypoints/scale_out/token_in_token_out/protocol.py b/vllm/en
      kv_transfer_params: dict[str, Any] | None = Field(
          default=None,
 diff --git a/vllm/entrypoints/scale_out/token_in_token_out/serving.py b/vllm/entrypoints/scale_out/token_in_token_out/serving.py
+index 1f4af4a..4391280 100644
 --- a/vllm/entrypoints/scale_out/token_in_token_out/serving.py
 +++ b/vllm/entrypoints/scale_out/token_in_token_out/serving.py
-@@ -352,6 +352,7 @@
+@@ -437,6 +437,7 @@ class ServingTokens(GenerateBaseServing):
          )
  
          assert result_generator is not None
@@ -30,33 +32,47 @@ diff --git a/vllm/entrypoints/scale_out/token_in_token_out/serving.py b/vllm/ent
  
          if request.stream:
              return self.serve_tokens_stream_generator(
-@@ -360,10 +361,16 @@
-                 request_id,
+@@ -446,6 +447,7 @@ class ServingTokens(GenerateBaseServing):
                  model_name,
                  request_metadata,
-+                weight_version,
+                 processors=processors,
++                weight_version=weight_version,
              )
  
          return await self.serve_tokens_full_generator(
--            request, result_generator, request_id, model_name, request_metadata
-+            request,
-+            result_generator,
-+            request_id,
-+            model_name,
-+            request_metadata,
-+            weight_version,
+@@ -455,6 +457,7 @@ class ServingTokens(GenerateBaseServing):
+             model_name,
+             request_metadata,
+             derender_request=derender_request,
++            weight_version=weight_version,
          )
  
      async def serve_tokens_full_generator(
-@@ -373,6 +380,7 @@
-         request_id: str,
+@@ -465,6 +468,7 @@ class ServingTokens(GenerateBaseServing):
          model_name: str,
          request_metadata: RequestResponseMetadata,
-+        weight_version: str | None,
+         derender_request: ChatCompletionRequest | None = None,
++        weight_version: str | None = None,
      ) -> ErrorResponse | GenerateResponse:
          created_time = int(time.time())
          final_res: RequestOutput | None = None
-@@ -457,15 +465,24 @@
+@@ -582,6 +586,7 @@ class ServingTokens(GenerateBaseServing):
+             created_time,
+             num_generated_tokens,
+             request_metadata,
++            weight_version,
+         )
+         response: (
+             GenerateTokensResponse | GenerateTextResponse | GenerateDerenderResponse
+@@ -625,6 +630,7 @@ class ServingTokens(GenerateBaseServing):
+         created_time: int,
+         num_generated_tokens: int,
+         request_metadata: RequestResponseMetadata,
++        weight_version: str | None = None,
+     ) -> dict[str, Any]:
+         """Build the fields shared by every non-streaming response level."""
+         assert final_res.prompt_token_ids is not None
+@@ -649,15 +655,24 @@ class ServingTokens(GenerateBaseServing):
          request_metadata.final_usage_info = usage
  
          per_request_metrics = None
@@ -71,7 +87,7 @@ diff --git a/vllm/entrypoints/scale_out/token_in_token_out/serving.py b/vllm/ent
 +        request_spec_decode_stats = (
 +            spec_decode_metrics.model_dump() if spec_decode_metrics is not None else None
 +        )
-         response_fields: dict[str, Any] = dict(
+         return dict(
              request_id=request_id,
              created=created_time,
              model=model_name,
@@ -81,11 +97,11 @@ diff --git a/vllm/entrypoints/scale_out/token_in_token_out/serving.py b/vllm/ent
              prompt_logprobs=clamp_prompt_logprobs(final_res.prompt_logprobs),
              prompt_token_id_logprobs=(
                  numpy2base64(final_res.prompt_token_id_logprobs)
-@@ -514,11 +531,13 @@
-         request_id: str,
+@@ -681,11 +696,13 @@ class ServingTokens(GenerateBaseServing):
          model_name: str,
          request_metadata: RequestResponseMetadata,
-+        weight_version: str | None,
+         processors: list[ChatStreamProcessor] | None = None,
++        weight_version: str | None = None,
      ) -> AsyncGenerator[str, None]:
          num_prompt_tokens = 0
          first_iteration = True
@@ -95,7 +111,7 @@ diff --git a/vllm/entrypoints/scale_out/token_in_token_out/serving.py b/vllm/ent
          sampling_params: SamplingParams = request.sampling_params
          # With n > 1, the first output may not include every choice yet.
          num_generated_tokens = [0] * sampling_params.n
-@@ -533,6 +552,9 @@
+@@ -706,6 +723,9 @@ class ServingTokens(GenerateBaseServing):
          try:
              async for res in result_generator:
                  last_res = res
@@ -105,20 +121,19 @@ diff --git a/vllm/entrypoints/scale_out/token_in_token_out/serving.py b/vllm/ent
                  if first_iteration:
                      if res.prompt_token_ids is not None:
                          num_prompt_tokens = len(res.prompt_token_ids)
-@@ -607,6 +629,9 @@
-                             choices=[GenerateTokensStreamChoice(**choice_fields)],
-                         )
- 
+@@ -820,6 +840,8 @@ class ServingTokens(GenerateBaseServing):
+                     else:
+                         choice = GenerateTokensStreamChoice(**choice_fields)
+                     chunk = response_cls(request_id=request_id, choices=[choice])
 +                    chunk.weight_version = weight_version
 +                    chunk.request_spec_decode_stats = request_spec_decode_stats
-+
+ 
                      if prompt_token_ids is not None:
                          chunk.prompt_token_ids = prompt_token_ids
-                         chunk.mm_placeholders = request._response_mm_placeholders
-@@ -661,6 +686,8 @@
-                         usage=final_usage_info,
-                         metrics=per_request_metrics,
-                     )
+@@ -866,6 +888,8 @@ class ServingTokens(GenerateBaseServing):
+                     usage=final_usage_info,
+                     metrics=per_request_metrics,
+                 )
 +                final_chunk.weight_version = weight_version
 +                final_chunk.request_spec_decode_stats = request_spec_decode_stats
                  yield f"data: {final_chunk.model_dump_json(exclude_none=True)}\n\n"
@@ -180,9 +195,10 @@ index 6238fbc8175..8260c3d326e 100644
          # Concatenate routed experts on finish
          routed_experts = None
 diff --git a/vllm/v1/engine/input_processor.py b/vllm/v1/engine/input_processor.py
+index 2ddfe54..2fd3030 100644
 --- a/vllm/v1/engine/input_processor.py
 +++ b/vllm/v1/engine/input_processor.py
-@@ -160,17 +160,10 @@
+@@ -198,17 +198,10 @@ class InputProcessor:
                      vocab_size=self.model_config.get_vocab_size(),
                  )
  
@@ -204,3 +220,108 @@ diff --git a/vllm/v1/engine/input_processor.py b/vllm/v1/engine/input_processor.
              if params.thinking_token_budget is not None and (
                  self.vllm_config.reasoning_config is None
                  or not self.vllm_config.reasoning_config.enabled
+diff --git a/vllm/config/watchdog_config.py b/vllm/config/watchdog_config.py
+index 0362510..f122013 100644
+--- a/vllm/config/watchdog_config.py
++++ b/vllm/config/watchdog_config.py
+@@ -11,11 +11,11 @@ _DEFAULT_CHECK_INTERVAL = 10
+ 
+ @config
+ class WatchdogConfig:
+-    """Configuration for the stack-dump watchdog.
++    """Configuration for the progress watchdog.
+ 
+     The watchdog runs a background thread that periodically checks whether the
+     main thread has fed it in time. If not, it dumps the stack traces of all
+-    threads to a dump file for debugging.
++    threads for debugging and optionally terminates the process.
+     """
+ 
+     timeout: int = Field(default=_DEFAULT_TIMEOUT, gt=0)
+@@ -26,5 +26,9 @@ class WatchdogConfig:
+     """Interval in seconds at which the watchdog checks for feed timeouts."""
+ 
+     dump_dir: str = ""
+-    """Directory to save stack dump files. Empty string disables the watchdog
+-    feature."""
++    """Directory to save stack dump files. Without a directory, fatal timeout
++    diagnostics are written to stderr."""
++
++    abort_on_timeout: bool = False
++    """Terminate a stalled process after dumping its stacks. The watchdog is
++    disabled when this is false and dump_dir is empty."""
+diff --git a/vllm/utils/watch_dog.py b/vllm/utils/watch_dog.py
+index 4b73823..bfe7ce4 100644
+--- a/vllm/utils/watch_dog.py
++++ b/vllm/utils/watch_dog.py
+@@ -39,13 +39,14 @@ class NoopWatchDog(WatchDog):
+ 
+ 
+ class ThreadedWatchDog(WatchDog):
+-    """Dumps the stacks of all threads when not fed within the timeout."""
++    """Reports stalled progress and optionally terminates the process."""
+ 
+     def __init__(self, name: str, watchdog_config: WatchdogConfig, logger: Logger):
+         self.name = name
+         self.timeout = watchdog_config.timeout
+         self.check_interval = watchdog_config.check_interval
+         self.dump_dir = watchdog_config.dump_dir
++        self.abort_on_timeout = watchdog_config.abort_on_timeout
+         self.dump_file = os.path.join(
+             self.dump_dir, f"VLLM_STACK_DUMP_for_{name}_{os.getpid()}.log"
+         )
+@@ -71,6 +72,7 @@ class ThreadedWatchDog(WatchDog):
+         try:
+             yield
+         finally:
++            self.feed()
+             self.active = True
+ 
+     def handle_failure(self, reason: str) -> None:
+@@ -83,6 +85,9 @@ class ThreadedWatchDog(WatchDog):
+ 
+     def dump_stack(self, reason: str) -> None:
+         try:
++            if not self.dump_dir:
++                faulthandler.dump_traceback(all_threads=True)
++                return
+             os.makedirs(self.dump_dir, exist_ok=True)
+             with open(self.dump_file, "a") as f:
+                 f.write(
+@@ -119,7 +124,20 @@ class ThreadedWatchDog(WatchDog):
+                 and self.last_timeout_log < self.last_feed_time
+             ):
+                 self.last_timeout_log = now
+-                self.handle_failure("feed timeout")
++                try:
++                    self.handle_failure("feed timeout")
++                finally:
++                    if self.abort_on_timeout:
++                        try:
++                            self.logger.error(
++                                "[Watchdog]%s stalled for %s seconds; "
++                                "terminating pid %d",
++                                self.name,
++                                self.timeout,
++                                os.getpid(),
++                            )
++                        finally:
++                            os._exit(1)
+ 
+     def start(self) -> None:
+         if self.thread is not None and self.thread.is_alive():
+@@ -154,12 +172,12 @@ def start_watch_dog(
+     watchdog_config: WatchdogConfig,
+     logger: Logger,
+ ) -> WatchDog:
+-    """Start the process-wide watchdog if ``watchdog_config.dump_dir`` is set.
++    """Start the watchdog when stack dumps or fatal timeouts are enabled.
+ 
+     Returns the WatchDog singleton either way.
+     """
+     global _watch_dog
+-    if not watchdog_config.dump_dir:
++    if not watchdog_config.dump_dir and not watchdog_config.abort_on_timeout:
+         return _watch_dog
+ 
+     logger.info(
