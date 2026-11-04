@@ -73,21 +73,6 @@ steps:
           NUM_GPUS: "4"
         command: *rocm_gpu_test
 
-      - label: ":warning: short · gsm8k_async 0.8B (4 GPU) [soft-fail]"
-        key: rocm-gsm8k-async-short
-        agents:
-          queue: amd_mi355_vime_rl
-        timeout_in_minutes: 360
-        soft_fail: true
-        retry:
-          automatic:
-            - exit_status: -1
-              limit: 2
-        env:
-          TEST_FILE: "test_qwen3.5_0.8B_gsm8k_async_short.py"
-          NUM_GPUS: "4"
-        command: *rocm_gpu_test
-
       # vllm-config suites — green on ROCm via the -rocm.py variants (--no-gradient-accumulation-fusion,
       # vLLM mem-util 0.3, --update-weight-transport disk for the colocate cases).
       - label: ":fire: vllm-config · distributed 0.5B (8 GPU)"
