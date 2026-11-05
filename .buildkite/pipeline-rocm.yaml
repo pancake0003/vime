@@ -1,5 +1,5 @@
 # Buildkite CI for vime — AMD ROCm GPU suites on the self-hosted gfx950 (MI355X) queue (amd_mi355_vime_rl),
-# running the prebuilt ROCm image. Steps set NOSET_*/NCCL_* ROCm env; fully_async gates, gsm8k soft_fails (NaN-logprob).
+# running the prebuilt ROCm image. Steps set NOSET_*/NCCL_* ROCm env; fully_async and gsm8k gate.
 
 env:
   # Prebuilt ROCm image (built from docker/Dockerfile.rocm). Override per-agent
@@ -56,20 +56,20 @@ steps:
                 -- bash -c '\''export CUDA_VISIBLE_DEVICES="$$HIP_VISIBLE_DEVICES"; exec python "tests/$$TEST_FILE"'\''
             '
 
-      # gsm8k not green: vLLM returns NaN rollout logprobs for Qwen3.5-0.8B on ROCm, diverging
-      # the train-vs-rollout check. soft_fail (non-blocking) until it passes on the U.is_rocm() path.
-      - label: ":warning: short · gsm8k 0.8B (4 GPU) [soft-fail]"
+      # gsm8k via the -rocm.py variant: object-store rollout transport, --no-offload-train and
+      # disk weight sync on ROCm (the earlier NaN-logprob soft-fail no longer reproduces).
+      - label: ":fire: short · gsm8k 0.8B (4 GPU)"
         key: rocm-gsm8k-short
         agents:
           queue: amd_mi355_vime_rl
         timeout_in_minutes: 360
-        soft_fail: true
+        soft_fail: false
         retry:
           automatic:
             - exit_status: -1
               limit: 2
         env:
-          TEST_FILE: "test_qwen3.5_0.8B_gsm8k_short.py"
+          TEST_FILE: "test_qwen3.5_0.8B_gsm8k_short-rocm.py"
           NUM_GPUS: "4"
         command: *rocm_gpu_test
 
